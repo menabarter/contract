@@ -1,0 +1,50 @@
+[package]
+name = "swap-escrow-v2"
+description = "Escrow swap contract for TON: NFT, GRAM and Jetton deposits with auto-execution"
+version = "0.1.0"
+license = "AGPL-3.0-or-later"
+
+[toolchain]
+acton = "1.1.0"
+
+[contracts.SwapEscrow]
+display-name = "SwapEscrow"
+src = "contracts/escrow_beta_v1.tolk"
+depends = []
+
+[contracts.NftItemMock]
+display-name = "NftItemMock"
+src = "contracts/nft_item_mock.tolk"
+depends = []
+
+[contracts.JettonWalletMock]
+display-name = "JettonWalletMock"
+src = "contracts/jetton_wallet_mock.tolk"
+depends = []
+
+[contracts.JettonMinterMock]
+display-name = "JettonMinterMock"
+src = "contracts/jetton_minter_mock.tolk"
+depends = []
+
+[lint.rules]
+# The codebase consistently uses the inline `createMessage(...).send(...)` form
+# in 19 places. Rewriting them would alter contract bodies for style alone
+# while the contract is under live testnet testing.
+create-message-inline-send = "allow"
+
+[test]
+
+[fmt]
+width = 100
+ignore = []
+
+[import-mappings]
+acton = ".acton"
+contracts = "contracts"
+gen = "gen"
+tests = "tests"
+wrappers = "wrappers"
+
+# Check full Acton.toml reference and all available keys:
+# https://ton-blockchain.github.io/acton/docs/acton-toml

@@ -1,0 +1,15 @@
+# Acton main directory
+.acton/
+
+# Build directory
+build/
+dist/
+
+.DS_Store
+node_modules/
+
+# Local secrets
+.env
+
+# Acton wallets — these hold PLAINTEXT MNEMONICS, never commit
+wallets.toml

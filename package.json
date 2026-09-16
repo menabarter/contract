@@ -1,0 +1,18 @@
+{
+  "name": "swap-escrow-v2-ts-checks",
+  "private": true,
+  "version": "0.1.0",
+  "license": "AGPL-3.0-or-later",
+  "description": "Thin TypeScript layer validating the generated SwapEscrow.gen.ts wrapper against cell-hash fixtures produced on the Tolk side.",
+  "scripts": {
+    "fixtures": "acton script scripts/gen_ts_fixtures.tolk > ts-tests/fixtures.txt",
+    "test": "tsx ts-tests/wrapper.test.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@ton/core": "^0.61.0",
+    "@types/node": "^22.20.2",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
