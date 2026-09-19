@@ -5,8 +5,8 @@
   "license": "AGPL-3.0-or-later",
   "description": "Thin TypeScript layer validating the generated SwapEscrow.gen.ts wrapper against cell-hash fixtures produced on the Tolk side.",
   "scripts": {
-    "fixtures": "acton script scripts/gen_ts_fixtures.tolk > ts-tests/fixtures.txt",
-    "test": "tsx ts-tests/wrapper.test.ts",
+    "fixtures": "acton script scripts/gen_ts_fixtures.tolk > ts-tests/fixtures.txt && acton script scripts/gen_ts_fixtures_nosup.tolk > ts-tests/fixtures-nosup.txt",
+    "test": "tsx ts-tests/wrapper.test.ts && tsx ts-tests/nosup.test.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {

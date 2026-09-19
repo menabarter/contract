@@ -7,7 +7,7 @@ supervisor role can also intervene at any time — see
 [Trust model](#trust-model) below for exactly what that role can do.
 
 Written in [Tolk](https://docs.ton.org/tolk/overview), built and tested with
-[Acton](https://ton-blockchain.github.io/acton/) 1.1.0.
+[Acton](https://ton-blockchain.github.io/acton/) 1.2.0.
 
 ## Status
 
@@ -22,11 +22,19 @@ found no exploitable defect at the current code hash. What it does record is
 the trust model you are accepting if you deploy or deposit: above all, that the
 supervisor can take everything. Read that section before either.
 
+`SwapEscrowNosup`, the supervisor-free variant described below, has its own
+manual review in
+[docs/SECURITY-REVIEW-NOSUP.md](docs/SECURITY-REVIEW-NOSUP.md); symbolic
+analysis for it has not been run yet.
+
 A note on naming: the contract source is `contracts/escrow_beta_v1.tolk`, while
 the contract metadata declares `version: "2.0.0-stage2"` and the Acton package
 is named `swap-escrow-v2`. The metadata is intentionally left untouched —
 changing it would change the compiled bytecode, and with it every deployed
-deal's address.
+deal's address. The same reasoning applies to
+`contracts/escrow_nosup_beta_v1.tolk`, whose own contract metadata declares
+`version: "1.0.0-beta"` — it is a separate, independently versioned contract,
+not a variant of the one above.
 
 ## Trust model
 
@@ -63,28 +71,137 @@ into a deal means trusting whoever controls that deal's supervisor key as
 much as you trust a conventional custodian. Verify who the supervisor is
 before depositing.
 
-### A supervisor-free variant is planned
+### The supervisor-free variant
 
-A second contract without the supervisor role is planned, to be offered
-alongside this one rather than replacing it: the party creating a deal picks
-which guarantee they want. This is a priority and will be implemented in the
-near future.
+A second contract, `contracts/escrow_nosup_beta_v1.tolk` (`SwapEscrowNosup`),
+is offered alongside this one rather than replacing it: the party creating a
+deal picks which guarantee they want. It has **no supervisor role at all** —
+no `supervisor` field in storage, and none of the emergency handlers described
+above exist in its bytecode. That is a **separate contract**, not a flag in
+storage, and the distinction is the whole point: a runtime flag would leave
+the emergency handlers in the bytecode and make their absence a promise the
+code merely keeps, while a separate contract makes it a property of the
+compiled code, checkable once against its own code hash (see
+[Verifying the build](#verifying-the-build) below) and inherited by every deal
+deployed from it. "Cannot" is worth more than "will not".
 
-It is planned as a **separate contract**, not a flag in storage. That
-distinction is the whole point. A runtime flag would leave the emergency
-handlers in the bytecode and make their absence a promise the code merely keeps;
-a separate contract makes it a property of the code, verifiable once against a
-code hash and inherited by every deal deployed from it. "Cannot" is worth more
-than "will not".
+Removing the supervisor also removes its only genuine job: rescuing an asset
+that push delivery could not complete. `SwapEscrowNosup` replaces that with a
+**pull fallback** instead. Distribution is still automatic and still
+push-first — nothing changes about the common path, where every asset simply
+arrives. What changes is what happens when a delivery bounces: instead of
+getting stuck the way it would without a supervisor's rescue handlers, the
+asset is marked **claimable**, and the rest of the distribution keeps
+going — a bounced delivery never stalls the deal. The asset's rightful
+recipient can then pull it out themselves with `claim_asset`
+(opcode `0x6d5f0006`), paying for that transfer's gas out of the value they
+attach to the call. Nobody else can trigger this: the contract only ever sends
+a claimed asset to the caller's own address, and only if the caller is the
+recipient this deal names for that asset — the party that deposited an asset
+can never claim it back once the swap has executed, and a stranger can never
+redirect it to themselves.
 
-The reason both will exist, rather than the supervisor simply being removed, is
-that its rescue paths are the only recovery for three cases this contract can
-genuinely reach. `returnForeignNft` and `returnJettons` both give up when the
-incoming message underpays the gas for the return — the asset then sits with the
-escrow, recoverable only through `rescue_nft` / `rescue_jetton`. A jetton
-overpayment whose refund cannot be funded strands the same way. And
-`force_deliver` is what unblocks a distribution whose recipient permanently
-rejects the transfer.
+NFTs and Jettons become claimable under different conditions, and the
+difference is deliberate. An NFT is claimable as soon as it has been received
+and the distribution has already attempted to send it — without waiting for a
+bounce at all — because an NFT item only ever honors a transfer from its
+current owner: if the NFT already left the escrow, a second attempt to send it
+is simply rejected by the NFT contract itself, so nothing is lost by trying
+anyway. A Jetton is different: the escrow's Jetton wallet for a given minter
+can hold tokens belonging to more than one asset of the deal, or a leftover
+from an overpayment, so resending it without proof that the earlier transfer
+failed risks moving tokens that belong to something else. A Jetton is
+therefore claimable only once a bounce has confirmed that the earlier transfer
+never left the escrow's wallet.
+
+A claim is funded entirely by the value attached to it, so it works on an
+emptied balance — but the contract's check is `value >= NFT_TRANSFER_VALUE`
+(0.03 TON) or `value >= JETTON_TRANSFER_VALUE` (0.05 TON) against the value as
+it arrives, while what actually reaches the NFT item or the Jetton wallet is
+that value minus this transaction's own cost. Attaching exactly the minimum
+therefore under-funds the transfer it pays for. Attach headroom — 0.1 TON for
+an NFT, 0.2 TON for a Jetton is comfortable. An under-funded NFT claim is
+harmless (it bounces and the asset stays claimable), but an under-funded
+Jetton claim clears the mark before sending, so if the failure is severe
+enough that no bounce comes back, the asset cannot be marked again.
+
+Two getters expose this state for a client to build a claim UI against:
+`claimableAssets()` returns the indices currently marked claimable, and
+`assetStatus(idx)` returns one asset's `(received, claimable, bounces)`. One
+caveat worth knowing before wiring up a "claim" button: an NFT's `claimable`
+flag can be **stale** — claiming an NFT that was in fact already delivered is
+harmless (the NFT contract rejects the transfer since the escrow is no longer
+the owner), but the bounce from that rejected attempt sets `claimable = true`
+again regardless. So check who currently owns the NFT before offering the
+button, rather than trusting the flag alone; Jetton claimability does not have
+this problem, since a Jetton bounce is proof the tokens are still on the
+escrow's wallet.
+
+#### Risks this variant does not remove
+
+Removing the supervisor does not remove every way an asset can end up stuck —
+it removes the ones a rescue handler was needed for, and leaves standing the
+ones no contract-side mechanism can fix without becoming exactly the kind of
+privileged role this variant is built to avoid:
+
+1. **A Jetton overpayment that arrives without enough gas to refund it**
+   (under roughly 0.03 TON) leaves the excess sitting in the escrow's Jetton
+   wallet; it is not a deal asset, so `claim_asset` does not apply to it.
+2. **A foreign NFT or Jetton sent to the contract without enough gas for a
+   return** has nothing to fund a refund with, and — if it arrives with a
+   zero forward amount — the contract never even learns it arrived. It is not
+   part of any deal's registry, so `claim_asset` cannot reach it either.
+3. **A Jetton transfer that fails inside the Jetton contract's own second
+   hop** never bounces back to the escrow, so the tokens stay on the escrow's
+   Jetton wallet without ever being marked claimable. This does not happen
+   with standard Jetton implementations.
+4. **A recipient whose own wallet rejects the incoming transfer** — an NFT
+   item that refuses the new owner, or a Jetton wallet that refuses the
+   credit — leaves the asset stuck: `claim_asset` can only ever send an asset
+   to the recipient's own address, so there is no other address to try.
+5. **`execute_swap` (manual execution) is `owner1`-only**, exactly as in the
+   contract with a supervisor.
+6. **An NFT belonging to the deal that arrives late and without enough gas**
+   for a bounce — say, sent again by mistake by whoever now holds it — can
+   still be pulled out by the deal's rightful recipient via `claim_asset`;
+   without that, it would be stuck the same way risk 2 describes.
+7. **A Jetton bounce that never reaches the escrow** (this needs a
+   non-standard Jetton wallet on the escrow's side — in practice essentially
+   never, since 0.05 TON comfortably covers a standard wallet's bounce) leaves
+   the tokens neither delivered nor claimable.
+8. **The value carried by a bounced delivery stays on the escrow's balance.**
+   Finalizing a deal sweeps the whole balance to `feeWallet` as its last act,
+   so a bounce that arrives afterwards — carrying back the transfer's own
+   value, on the order of 0.03 TON — lands on an account that has already been
+   swept, and no later handler moves it: `claim_asset` is funded by the value
+   the claimer attaches and forwards that value onward, and this variant has
+   no privileged withdrawal. The remainder is consumed by storage fees over
+   time. It affects only deals where a delivery bounced, never the assets
+   themselves, and it is the direct cost of having no privileged role: a deal
+   whose deliveries all succeed ends with a zero balance. A bounce that
+   arrives *before* the sweep is not returned to its depositor either — it
+   simply joins the balance the sweep hands to `feeWallet`.
+9. **A large rise in the network's gas price outlives a deployed deal.** The
+   contract prices its own compute dynamically, so its internal reserves
+   follow the network, but the values it hands to other contracts —
+   `NFT_TRANSFER_VALUE` (0.03 TON), `JETTON_TRANSFER_VALUE` (0.05),
+   `PROVIDE_WALLET_VALUE` (0.02) — are fixed at deploy and cannot be raised
+   for a deal that already exists. If gas becomes materially more expensive,
+   deliveries in already-deployed deals start failing for want of gas. This is
+   survivable rather than fatal precisely because of `claim_asset`: a failed
+   delivery leaves the asset with its rightful recipient to pull, at whatever
+   value the network then demands. A deal still in SETUP is the harder case,
+   since TEP-89 discovery has no pull equivalent — `cancel_swap` is the exit.
+10. **A batch deal one message short of finalization needs a `kick`.** When
+    the final batch of a large deal is the one that sent assets, the contract
+    defers finalization — the GRAM legs, the service fee, the pro-rata refund
+    and the sweep — to one more self-message. That message is ordinary: it can
+    fail, and its bounce is deliberately ignored. Either owner resumes the
+    chain with `kick`, and the assets themselves are already delivered by that
+    point; but if both owners walk away believing the deal is finished, the
+    TON legs stay on the contract, and unlike registry assets they have no
+    pull equivalent. A client should watch `distributionProgress()` and offer
+    `kick` while it reports anything other than idle.
 
 ## What the contract validates, and what it cannot
 
@@ -127,6 +244,20 @@ on chain checks that `assets` holds exactly the keys `0 .. assetsCount-1`,
 that `jettonsCount` agrees with the registry's contents, or that
 `pendingWallets` was derived from it. A malformed deal is simply a different
 address, reachable only if something sends a user there.
+
+`required1Count` and `required2Count` deserve naming here, because they are
+the fields that decide *who has to deposit what* before the swap may run, and
+a registry can be perfectly well-formed while they are not. Set
+`required1Count` to zero on a deal whose side 1 holds three NFTs, and side 2's
+deposit alone satisfies every gate: the swap executes, side 2's asset goes to
+side 1, and side 1 was never required to deposit anything. The contract
+enforces the counts it was deployed with; it has no notion of what the two
+parties agreed. This is the same client-side check as above, and it only works
+when the reconstruction starts from the terms the user was shown — deriving
+the address from a `Storage` blob handed over by whatever served the deal
+proves nothing, since it necessarily matches itself. Rebuild the registry from
+the displayed positions, confirm each side's required count equals the number
+of positions displayed for that side, then compare addresses.
 
 ## Deal size limits
 
@@ -182,14 +313,17 @@ mode are pinned.
 
 | Path | Contents |
 |---|---|
-| `contracts/escrow_beta_v1.tolk` | the escrow contract |
-| `contracts/storage.tolk`, `messages.tolk` | storage layout and message schema |
-| `contracts/nft_item_mock.tolk`, `jetton_wallet_mock.tolk`, `jetton_minter_mock.tolk`, `jetton_mock_lib.tolk` | NFT and Jetton mocks (and their shared helper code) used by tests only |
-| `tests/` | 186 tests across 20 test files, plus a shared test-helper module |
-| `wrappers/`, `wrappers-ts/` | generated wrappers for Tolk tests and TypeScript consumers |
-| `ts-tests/` | validates the TypeScript wrapper against Tolk-side cell-hash fixtures |
-| `scripts/` | deployment and testnet smoke scripts |
-| `docs/` | the security review |
+| `contracts/escrow_beta_v1.tolk` | the escrow contract with a supervisor role (`SwapEscrow`) |
+| `contracts/storage.tolk`, `messages.tolk` | storage layout and message schema for `SwapEscrow` |
+| `contracts/escrow_nosup_beta_v1.tolk` | the supervisor-free escrow contract (`SwapEscrowNosup`) |
+| `contracts/nosup/storage.tolk`, `nosup/messages.tolk` | storage layout, constants, error codes and the `ClaimAsset` message for `SwapEscrowNosup`; standard message structs are imported from `contracts/messages.tolk`, not duplicated |
+| `contracts/nft_item_mock.tolk`, `jetton_wallet_mock.tolk`, `jetton_minter_mock.tolk`, `jetton_mock_lib.tolk`, `nft_item_gas_mock.tolk` | NFT and Jetton mocks (and their shared helper code) used by tests only; `nft_item_gas_mock.tolk` models an NFT with a higher gas threshold, for the `SwapEscrowNosup` claim tests |
+| `tests/` | 187 tests across 21 test files for `SwapEscrow`, plus a shared test-helper module |
+| `tests/nosup/` | 177 tests across 20 test files for `SwapEscrowNosup`, plus a shared test-helper module |
+| `wrappers/`, `wrappers-ts/` | generated wrappers for Tolk tests and TypeScript consumers, for both contracts |
+| `ts-tests/` | validates both TypeScript wrappers against Tolk-side cell-hash fixtures |
+| `scripts/` | deployment and testnet smoke scripts, for both contracts |
+| `docs/` | the security reviews |
 | `.github/` | CI workflow (build, format check, lint, tests) |
 
 Build artifacts (`build/`, `.acton/`) are generated locally and are not part of
@@ -197,7 +331,7 @@ the repository.
 
 ## Build and test
 
-Requires Acton 1.1.0.
+Requires Acton 1.2.0.
 
 ```bash
 acton build
@@ -220,7 +354,14 @@ The compiled code hash of `SwapEscrow` is:
 41F7882FE4445147DAC4907FF6AEB60C32C4F7A5F43BFE5357433C18D41418D3
 ```
 
-Run `acton build` and compare against `build/SwapEscrow.json`.
+The compiled code hash of `SwapEscrowNosup` is:
+
+```
+42883CBEF30F0E8E703A87046E3592B71F8C505CBEA05B92534FC699C3CE874C
+```
+
+Run `acton build` and compare against `build/SwapEscrow.json` and
+`build/SwapEscrowNosup.json` respectively.
 
 ## Continuous integration
 
