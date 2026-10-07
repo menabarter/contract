@@ -1,6 +1,7 @@
 // Copyright (C) 2026 MENA
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import "@stdlib/gas-payments"
 import "@acton/emulation/network"
 import "@acton/emulation/testing"
 import "@acton/testing/expect"
@@ -450,4 +451,98 @@ get fun `test a side with no assets gets back its overpayment`() {
             return v >= ton("0.5") && v <= ton("0.55");
         },
     });
+}
+
+// A 1x1 NFT deal with the given TON legs, deployed and untouched.
+fun legDeal(tag: string, seed: int, gram1: coins, gram2: coins): Deal1x1Legs {
+    val o1 = testing.treasury(tagged(tag, "-o1"));
+    val o2 = testing.treasury(tagged(tag, "-o2"));
+    val fw = testing.treasury(tagged(tag, "-fw"));
+    val nft1 = deployNft(o1, seed);
+    val nft2 = deployNft(o2, seed + 1);
+    var cfg = makeBasicConfig(o1, o2, fw);
+    var n1: map<uint16, address> = [];
+    n1.set(0, nft1);
+    var n2: map<uint16, address> = [];
+    n2.set(0, nft2);
+    cfg.nfts1 = n1;
+    cfg.nfts1Count = 1;
+    cfg.nfts2 = n2;
+    cfg.nfts2Count = 1;
+    cfg.gram1Amount = gram1;
+    cfg.gram2Amount = gram2;
+    val escrow = deployEscrow(o1, cfg);
+    return Deal1x1Legs { escrow, o1, o2, nft1, nft2 };
+}
+
+struct Deal1x1Legs {
+    escrow: EscrowFixture
+    o1: Treasury
+    o2: Treasury
+    nft1: address
+    nft2: address
+}
+
+// Execution reserves gas for every message it sends, one per TON leg among
+// them, and that reserve is shared equally. A TON leg on one side therefore
+// raises the other side's figure by exactly half of one send's gas (the leg
+// itself is that side's own): side 2 takes the odd nanoton.
+get fun `test a TON leg adds one send's gas to the shared costs`() {
+    val sendGas = calculateGasFee(BASECHAIN, 100000 + EXEC_GAS_UNITS_PER_SEND) -
+        calculateGasFee(BASECHAIN, 100000);
+    val (_a1, base2) = legDeal("ae-leg0", 79711, 0, 0).escrow.executionShortfall();
+    val (base1, _b2) = legDeal("ae-leg0b", 79713, 0, 0).escrow.executionShortfall();
+    val (_c1, with1) = legDeal("ae-leg1", 79715, ton("1"), 0).escrow.executionShortfall();
+    val (with2, _d2) = legDeal("ae-leg2", 79717, 0, ton("1")).escrow.executionShortfall();
+    val d2 = 2 * (with1 - base2) - sendGas;
+    val d1 = 2 * (with2 - base1) - sendGas;
+    expect(d2 >= -2 && d2 <= 2).toEqual(true);
+    expect(d1 >= -2 && d1 <= 2).toEqual(true);
+}
+
+// The NFT forwards can fund a side's whole share, its TON leg's value
+// included, while the leg itself is unpaid. The deal must still wait for the
+// leg — and for the service fee — and execute only once they are paid.
+fun fundedByForwards(
+    tag: string,
+    seed: int,
+    gram1: coins,
+    gram2: coins,
+    payFee1: bool,
+): Deal1x1Legs {
+    val d = legDeal(tag, seed, gram1, gram2);
+    if (payFee1) {
+        expect(
+            d.escrow.sendText(d.o1.address, "service_fee_owner1", SERVICE_FEE),
+        ).toHaveAllSuccessfulTxs();
+    }
+    expect(
+        d.escrow.sendText(d.o2.address, "service_fee_owner2", SERVICE_FEE),
+    ).toHaveAllSuccessfulTxs();
+    expect(sendNftToEscrow(d.o1, d.nft1, d.escrow.address, ton("0.5"), 0)).toHaveAllSuccessfulTxs();
+    expect(sendNftToEscrow(d.o2, d.nft2, d.escrow.address, ton("0.5"), 1)).toHaveAllSuccessfulTxs();
+    return d;
+}
+
+get fun `test an unpaid side 1 leg holds execution even when forwards cover it`() {
+    val d = fundedByForwards("ae-hold1", 79721, ton("0.05"), 0, true);
+    expect(d.escrow.phase()).toEqual(PHASE_ACTIVE);
+    expect(d.escrow.sendText(d.o1.address, "deposit_ton1", ton("0.05"))).toHaveAllSuccessfulTxs();
+    expect(d.escrow.phase()).toEqual(PHASE_DONE);
+}
+
+get fun `test an unpaid side 2 leg holds execution even when forwards cover it`() {
+    val d = fundedByForwards("ae-hold2", 79731, 0, ton("0.05"), true);
+    expect(d.escrow.phase()).toEqual(PHASE_ACTIVE);
+    expect(d.escrow.sendText(d.o2.address, "deposit_ton2", ton("0.05"))).toHaveAllSuccessfulTxs();
+    expect(d.escrow.phase()).toEqual(PHASE_DONE);
+}
+
+get fun `test an unpaid service fee 1 holds execution even when forwards cover it`() {
+    val d = fundedByForwards("ae-holdf", 79741, 0, 0, false);
+    expect(d.escrow.phase()).toEqual(PHASE_ACTIVE);
+    expect(
+        d.escrow.sendText(d.o1.address, "service_fee_owner1", SERVICE_FEE),
+    ).toHaveAllSuccessfulTxs();
+    expect(d.escrow.phase()).toEqual(PHASE_DONE);
 }
