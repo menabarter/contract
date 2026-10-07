@@ -107,6 +107,25 @@ get fun `test paying the getter figures exactly falls short by the payments' own
     expect(cost1 < GETTER_PAYMENT_HEADROOM).toEqual(true);
 }
 
+// After both sides have paid their figures exactly, each side is funded on its
+// own counters, but the balance is short by the two payments' gas. An
+// execute_swap carrying less than that shortfall passes every per-side check
+// and must still stop at the balance check (430), leaving the deal untouched.
+get fun `test execute_swap on a short balance fails with 430 and changes nothing`() {
+    val p = pending("es-430", 79951, 50, ton("0.003"), 0);
+    val (s1, s2) = p.escrow.executionShortfall();
+    p.escrow.sendText(p.o1.address, "deposit_ton1", s1);
+    p.escrow.sendText(p.o2.address, "deposit_ton2", s2);
+    expect(p.escrow.phase()).toEqual(PHASE_ACTIVE);
+    val (u1, u2) = p.escrow.executionShortfall();
+    val carried = ton("0.001");
+    expect(u1 + u2 > carried).toEqual(true);
+    val res = p.escrow.sendText(p.o1.address, "execute_swap", carried);
+    expect(res).toHaveFailedTx({ to: p.escrow.address, exitCode: Errors.InsufficientBalance });
+    expect(p.escrow.phase()).toEqual(PHASE_ACTIVE);
+    expect(readMockOwner(p.nfts1.mustGet(0))).toEqual(p.escrow.address);
+}
+
 // Once side 1's payment has landed, side 1's figure is only its half of the
 // balance deficit that payment's gas left; side 2 can pay both figures and
 // the deal executes with no headroom at all.
