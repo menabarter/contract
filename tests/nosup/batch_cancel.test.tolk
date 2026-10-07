@@ -122,11 +122,14 @@ get fun `test batched cancel returns 120 assets in batches with final sweep`() {
     // own gas includes committing its record (a save plus COMMIT) before its
     // auto-execute check, so S accrues on all 120 deposits, not only a
     // completing one.
-    // Measured: refund1 = 1.548106878, refund2 = 3.438106879, i.e.
-    // N_i - refund_i = 0.761893 on both sides (S and U split evenly, so this
-    // is side-independent): the shared costs net of U come to about 1.5238
-    // total, 0.7619 per side.
-    // The windows do not overlap (1.530..1.560 vs 3.420..3.450): a side
+    // Measured (Tolk 1.5.0): refund1 = 1.86264975, refund2 = 3.75264975,
+    // i.e. N_i - refund_i = 0.44735025 on both sides (S and U split evenly,
+    // so this is side-independent): the shared costs net of U come to about
+    // 0.8947 total, 0.4474 per side. S is dominated by the unhinted deposits'
+    // registry walk, so the windows move with the compiler: on Tolk 1.4.2 the
+    // same deal measured refund1 = 1.548106878 (an unhinted deposit into the
+    // last of 120 entries took 332,827 gas there, 181,907 on Tolk 1.5.0).
+    // The windows do not overlap (1.850..1.875 vs 3.740..3.765): a side
     // transposition (refunds going to the wrong depositor) would guarantee
     // this test fails.
     val f = setupBigDeal(
@@ -175,14 +178,14 @@ get fun `test batched cancel returns 120 assets in batches with final sweep`() {
         from: f.escrow.address,
         to: f.o1.address,
         value: fun(v: coins): bool {
-            return v >= ton("1.530") && v <= ton("1.560");
+            return v >= ton("1.850") && v <= ton("1.875");
         },
     });
     expect(res).toHaveTx({
         from: f.escrow.address,
         to: f.o2.address,
         value: fun(v: coins): bool {
-            return v >= ton("3.420") && v <= ton("3.450");
+            return v >= ton("3.740") && v <= ton("3.765");
         },
     });
 

@@ -3,7 +3,7 @@
 **Date:** 2026-09-29
 **Subject:** `contracts/escrow_nosup_beta_v1.tolk`, `contracts/nosup/storage.tolk`, `contracts/nosup/accounting.tolk`, `contracts/nosup/messages.tolk`, reviewed as a diff against `contracts/escrow_beta_v1.tolk` (code hash `41F7882FE4445147DAC4907FF6AEB60C32C4F7A5F43BFE5357433C18D41418D3`, covered by `docs/SECURITY-REVIEW-2026-09-11.md`)
 **Code hash reviewed:** `A76E7AE03669554882BA6371CCC9A70060E00E583AC9721F001575E25F6B99C0`
-**Toolchain:** Acton 1.2.0
+**Toolchain:** Acton 1.2.0 (Tolk 1.4.2). The repository has since moved to Acton 1.2.1 (Tolk 1.5.0); the reviewed source is unchanged and compiles there to `BDECE3AAC1685E18CEF537F2E9F23ADAB49C6BAF363AFC217D9BC06DCCF4BB58`.
 **Method:** manual review of the contract's source and of its diff against `escrow_beta_v1.tolk`, plus the project's mutation-testing results: 273 critical-level mutants against `SwapEscrowNosup`, 222 killed, 50 survived (all outside the four security-critical functions — `onBouncedMessage`, `handleClaimAsset`, `runDistributionBatch`, `handleKick` — except two mutants inside them that were confirmed equivalent by manual guard-removal testing), and 1 mutant the mutation harness could not execute because it induces a genuine non-terminating self-message chain rather than a scoreable pass/fail. These mutation-testing counts were not obtained at the code hash stated above as reviewed — the mutation run predates later changes to this code — and mutation testing has not been re-run to confirm they still hold at this hash; no claim is made here that they do. Symbolic execution (TSA) has not been run against this contract — see [Tooling](#tooling) below.
 
 Line numbers refer to the source at the hash above, as published in this

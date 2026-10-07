@@ -259,8 +259,10 @@ fun batchWithExtra(tag: string, seed: int, extra: coins): (TinyDeal, SendResultL
 get fun `test a batch finale with a refund below one forward fee settles and sweeps it`() {
     val plainFwd = calculateForwardFee(BASECHAIN, 0, 0);
     // a probe on an identical fixture measures where side 1's refund starts:
-    // 0.1 TON over both figures yields a refund well above the minimum
-    val probeExtra = ton("0.1");
+    // 0.5 TON over both figures yields a refund well above the minimum. Where
+    // the refund starts depends on the unhinted deposits' gas, i.e. on the
+    // compiler: 0.072 over both figures on Tolk 1.4.2, 0.166 on Tolk 1.5.0.
+    val probeExtra = ton("0.5");
     val (p, pres, _pfw) = batchWithExtra("erm-bp", 86801, probeExtra);
     expect(p.escrow.phase()).toEqual(PHASE_DONE);
     val probeRefund1 = valueSent(pres, p.escrow.address, p.o1.address) + plainFwd;

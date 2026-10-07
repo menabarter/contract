@@ -7,7 +7,7 @@ supervisor role can also intervene at any time — see
 [Trust model](#trust-model) below for exactly what that role can do.
 
 Written in [Tolk](https://docs.ton.org/tolk/overview), built and tested with
-[Acton](https://ton-blockchain.github.io/acton/) 1.2.0.
+[Acton](https://ton-blockchain.github.io/acton/) 1.2.1 (Tolk 1.5.0).
 
 ## Status
 
@@ -510,7 +510,7 @@ the repository.
 
 ## Build and test
 
-Requires Acton 1.2.0.
+Requires Acton 1.2.1, which bundles Tolk 1.5.0.
 
 ```bash
 acton build
@@ -527,16 +527,28 @@ npm test
 
 ## Verifying the build
 
-The compiled code hash of `SwapEscrow` is:
+A code hash depends on the compiler as well as the source.
+
+The deployed `SwapEscrow` was built with Acton 1.2.0 (Tolk 1.4.2), which
+compiles it to:
 
 ```
 41F7882FE4445147DAC4907FF6AEB60C32C4F7A5F43BFE5357433C18D41418D3
 ```
 
-The compiled code hash of `SwapEscrowNosup` is:
+The same source compiles to a different hash with the current toolchain
+(Acton 1.2.1, Tolk 1.5.0):
 
 ```
-A76E7AE03669554882BA6371CCC9A70060E00E583AC9721F001575E25F6B99C0
+25811004DF61AAB86E8A06292804E9AE88E18A06CC6FF54E88CAFE510BEA9B3B
+```
+
+To check the deployed contract, build this source with Acton 1.2.0.
+
+The compiled code hash of `SwapEscrowNosup` with the current toolchain is:
+
+```
+BDECE3AAC1685E18CEF537F2E9F23ADAB49C6BAF363AFC217D9BC06DCCF4BB58
 ```
 
 Run `acton build` and compare against `build/SwapEscrow.json` and

@@ -5,7 +5,7 @@ version = "0.1.0"
 license = "AGPL-3.0-or-later"
 
 [toolchain]
-acton = "1.2.0"
+acton = "1.2.1"
 
 [contracts.SwapEscrow]
 display-name = "SwapEscrow"
