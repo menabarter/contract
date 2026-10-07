@@ -9,6 +9,7 @@ import "@acton/emulation/network"
 import "@acton/emulation/testing"
 import "@acton/testing/expect"
 import "@acton/types/big_array"
+import "@acton/types/message"
 import "@acton/types/transaction"
 import "@contracts/messages"
 import "@wrappers/SwapEscrowNosup.gen"
@@ -189,6 +190,62 @@ get fun `test a fast cancel does not reserve gas above the transaction ceiling`(
                 DUST,
     ).toEqual(true);
     expect(testing.getAccountBalance(d.escrow.address)).toEqual(d.escrow.storageFloor());
+}
+
+// The value of the first message `from` sent `to` in this trace, as it
+// arrived; -1 when there is none.
+fun firstValueTo(res: SendResultList, from: address, to: address): coins {
+    val tx = res.findTransaction({ from, to });
+    if (tx == null) {
+        return -1;
+    }
+    val info = tx.loadInMsg<RemainingBitsAndRefs>().info;
+    if (info is TlbInternalMessage) {
+        return info.value.grams;
+    }
+    return -1;
+}
+
+// The cancel's fixed cost C on an n-entry registry with no deposits, both
+// sides having paid the same 1 TON fee. Both formula refunds are then
+// positive, the canceller's attachment all comes back as surplus, and the two
+// refunds split R = balance - C: side 2 gets the odd nanoton, so
+// C = balance - 2 x refund2, to within one nanoton. Returns (C, storageFloor).
+fun cancelBaseCost(tag: string, n: int, seed: int): (coins, coins) {
+    val d = deployActiveRegistry(tag, n, 0, seed);
+    expect(
+        d.escrow.sendText(d.o1.address, "service_fee_owner1", ton("1")),
+    ).toHaveAllSuccessfulTxs();
+    expect(
+        d.escrow.sendText(d.o2.address, "service_fee_owner2", ton("1")),
+    ).toHaveAllSuccessfulTxs();
+    val floor = d.escrow.storageFloor();
+    val (_req, attach) = d.escrow.cancelCost();
+    val before = testing.getAccountBalance(d.escrow.address);
+    val res = d.escrow.sendText(d.o1.address, "cancel_swap", attach);
+    expect(res).toHaveAllSuccessfulTxs();
+    expect(d.escrow.phase()).toEqual(PHASE_CANCELLED);
+    val refund2 = firstValueTo(res, d.escrow.address, d.o2.address);
+    expect(refund2 > 0).toEqual(true);
+    return (before - 2 * refund2, floor);
+}
+
+// On the batch path the initiating transaction runs only the first batch,
+// which stops at BATCH_GAS_SOFT_CAP, so its gas units — the limit and the
+// reserve priced from it — are capped at CONTINUE_GAS_UNITS. 330 and 340
+// entries model 45,000 + 9,000 x 4 sends + 2,200 per entry = 807,000 and
+// 829,000 units, both above the cap, so the initiating transaction's reserve
+// is the same for both. Their fixed costs then differ only by the storage
+// floor and by the batch chain's walk over the 10 extra entries (both chains
+// need the same number of batches); an uncapped reserve would add the same
+// 22,000 units a second time.
+get fun `test a batch cancel's reserve is capped at one batch`() {
+    val (c330, f330) = cancelBaseCost("cs-bcap-a", 330, 0x6B0000);
+    val (c340, f340) = cancelBaseCost("cs-bcap-b", 340, 0x6C0000);
+    val walk = calculateGasFee(BASECHAIN, 100000 + SKIP_GAS_UNITS_PER_ENTRY * 10) -
+        calculateGasFee(BASECHAIN, 100000);
+    val diff = (c340 - c330) - (f340 - f330) - walk;
+    expect(diff >= -2 && diff <= 2).toEqual(true);
 }
 
 // The same on the batch path: the first batch's walk runs in the initiating
