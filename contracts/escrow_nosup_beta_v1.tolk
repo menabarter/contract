@@ -1271,9 +1271,9 @@ fun handleCancelSwap(sender: address, value: coins) {
 // stuck) on the other side. A duplicate on the SAME side is harmless — same
 // owner either way. Paid entirely by the claimer's attached value, like the
 // rest of claim_asset, at about 1,350 gas per entry: a 100-entry registry's
-// claim uses 134,738 gas (about 0.009 TON today). No attachment buys more than
+// claim uses 134,352 gas (about 0.009 TON today). No attachment buys more than
 // the 1,000,000-gas transaction limit, so above about 740 entries (measured:
-// 740 entries 994,213 gas, 760 out of gas) this claim always runs out of gas
+// 740 entries 993,827 gas, 760 out of gas) this claim always runs out of gas
 // and an unrecorded item there cannot be pulled out; running out of gas simply
 // bounces the value back.
 fun Storage.hasCrossSideDuplicate(self, idx: uint16, addr: address): bool {

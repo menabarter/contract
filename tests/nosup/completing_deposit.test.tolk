@@ -106,21 +106,23 @@ get fun `test 50x50 completing deposit with 0.02 is kept`() {
 // At the recording threshold: the deposit is recorded, but the forward's own
 // gas does not stretch to an auto-execute attempt, and the deal waits for
 // execute_swap. Measured on this deal size (10x10, ~4 TON already on the
-// balance from the prior deposits): 0.00086 leaves the item unrecorded — the
-// transaction's own gas (funded only by this deposit's forward, 12,899 units)
-// runs out (compute phase exit -14) before the registry update and its
-// COMMIT complete, and the NFT, already moved to the escrow, does not bounce
-// back; it simply sits there untracked. 0.00087 buys just enough gas (13,049
-// units) for the transaction to record the item, evaluate the auto-execute
+// balance from the prior deposits) with Tolk 1.5.0: 0.00071 leaves the item
+// unrecorded — the transaction's own gas (funded only by this deposit's
+// forward, 10,649 units) runs out (compute phase exit -14) before the
+// registry update and its COMMIT complete, and the NFT, already moved to the
+// escrow, does not bounce back; it simply sits there untracked. 0.00072 buys
+// just enough gas (10,799 units) for the transaction to record the item,
+// evaluate the auto-execute
 // check to false, and finish normally — SETGASLIMIT is never reached, and the
 // balance rises by only 66 nanoton. The recording threshold is set by the gas
 // spent up to and including the COMMIT (`st.save();
 // commitContractDataAndActions();`); `tryAutoExecute` runs only after that
 // COMMIT, so its own cost cannot move the threshold either way — which is why
-// 0.00086/0.00087 is the same with and without `@inline` on it. It moves if
-// the recording cost itself changes.
-get fun `test 10x10 completing deposit with 0.00087 is kept`() {
-    expectRecordedAndSafe(completing("cd-10c", 78401, 10, ton("0.00087")), 10);
+// the threshold is the same with and without `@inline` on it. It moves if
+// the recording cost itself changes, the compiler included: on Tolk 1.4.2 it
+// was 0.00087 (0.00086 unrecorded).
+get fun `test 10x10 completing deposit with 0.00072 is kept`() {
+    expectRecordedAndSafe(completing("cd-10c", 78401, 10, ton("0.00072")), 10);
 }
 
 // The completing deposit is a jetton: 10 NFTs on side 1, one jetton on side 2.

@@ -57,9 +57,10 @@ fun pending(tag: string, seed: int, n: int, forward: coins, gram2: coins): Pendi
 // What each side adds to its executionShortfall() figure when both sides pay
 // figures read at the same time: the first payment's own processing gas comes
 // off the balance before the second payment arrives. A deposit_ton1/2 that
-// does not execute costs 824,601 nanoton at today's gas price (measured below
-// in `paying the getter figures exactly ...`); 0.001 covers it with a 21%
-// margin even when only one side adds it.
+// does not execute costs 758,401 nanoton at today's gas price with Tolk 1.5.0
+// (824,601 with Tolk 1.4.2; measured below in `paying the getter figures
+// exactly ...`); 0.001 covers it with a 32% margin even when only one side
+// adds it.
 const GETTER_PAYMENT_HEADROOM = ton("0.001")
 
 // Deposit processing gas comes off the shared balance, not off the per-side

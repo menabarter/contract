@@ -195,7 +195,7 @@ what execution needs; while the deal is in SETUP or ACTIVE, that deficit is
 split equally on top of the two figures (side 2 takes the odd nanoton). The
 balance check counts the paying message's value before its own gas, so the
 payment that completes the deal needs nothing extra. When both sides pay
-figures read at the same time, the first payment's own gas (824,601 nanoton
+figures read at the same time, the first payment's own gas (758,401 nanoton
 for a `deposit_ton1`/`deposit_ton2` at today's gas price) is already gone
 when the second arrives: each side adds 0.001 TON to its figure. Once one
 side's payment has landed, re-reading shows that side owing only its half of
@@ -256,7 +256,7 @@ return is sent back to its sender rather than staying on the balance.
 An NFT deposit's sender is checked against the registry only when the
 notification carries at least 0.03 TON (`RETURN_TRANSFER_VALUE`, enough to
 fund returning it); below that, the item is credited to whichever side's free
-slot it matches, regardless of who actually sent it. Sending a registry item with a forward amount below about 0.00087 TON
+slot it matches, regardless of who actually sent it. Sending a registry item with a forward amount below about 0.00072 TON
 (measured on a 10×10 deal; the exact figure moves with deal size) means the
 notification cannot pay for the escrow's own transaction to record it: that
 transaction runs out of gas before the registry update commits, so the item
@@ -272,7 +272,7 @@ typical deal (up to 100 entries) the claim transaction uses about 135,000 gas,
 about 0.009 TON at today's gas price, paid from the attachment. The scan
 cannot exceed the 1,000,000-gas limit of a single transaction whatever the
 attachment, so on a registry above about 740 entries this claim always runs
-out of gas (measured: 740 entries 994,213 gas; 760 entries out of gas) and
+out of gas (measured: 740 entries 993,827 gas; 760 entries out of gas) and
 such an unrecorded item cannot be pulled out at all. Running out of gas
 simply bounces the attached value back without moving anything. A foreign NFT or
 Jetton — one that matches no free slot — is
