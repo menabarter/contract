@@ -52,6 +52,17 @@ fun waitTrace(res: SendResultList, label: string): SendResultList {
     return res;
 }
 
+// A per-run seed. The wallet's last transaction LT changes with every run, so
+// the mocks and the escrow get fresh addresses instead of landing on objects a
+// previous run left on the network (an NFT already handed to the other side).
+fun runSeed(wallet: address): int {
+    val shard = scripts.fetchShardAccount(wallet);
+    if (shard == null) {
+        return 0;
+    }
+    return shard.lastTransLt % 1000000000;
+}
+
 fun deployNftMock(deployer: address, owner: address, seed: int): address {
     val init = ContractState {
         code: build("NftItemMock"),
@@ -118,16 +129,19 @@ fun main() {
     println("wallet1 = {}", wallet1.address);
     println("wallet2 = {}", wallet2.address);
 
-    val nft1 = deployNftMock(wallet1.address, wallet1.address, 87001);
+    val seed = runSeed(wallet1.address);
+    println("run seed = {}", seed);
+
+    val nft1 = deployNftMock(wallet1.address, wallet1.address, seed);
     println("nft1 (side1 -> wallet2) = {}", nft1);
-    val nft2 = deployNftMock(wallet2.address, wallet2.address, 87002);
+    val nft2 = deployNftMock(wallet2.address, wallet2.address, seed + 1);
     println("nft2 (side2 -> wallet1) = {}", nft2);
 
     var assets: map<uint16, Asset> = [];
     assets.set(0, mkAsset(1, nft1));
     assets.set(1, mkAsset(2, nft2));
     val initStorage = Storage {
-        swapId: 90701,
+        swapId: seed,
         phase: PHASE_ACTIVE,
         owner1: wallet1.address,
         owner2: wallet2.address,

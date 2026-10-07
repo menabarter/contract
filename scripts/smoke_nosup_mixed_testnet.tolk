@@ -58,6 +58,17 @@ fun waitTrace(res: SendResultList, label: string): SendResultList {
     return res;
 }
 
+// A per-run seed. The wallet's last transaction LT changes with every run, so
+// the mocks and the escrow get fresh addresses instead of landing on objects a
+// previous run left on the network (a minter whose wallets already hold jettons).
+fun runSeed(wallet: address): int {
+    val shard = scripts.fetchShardAccount(wallet);
+    if (shard == null) {
+        return 0;
+    }
+    return shard.lastTransLt % 1000000000;
+}
+
 fun deployNftMock(deployer: address, owner: address, seed: int): address {
     val init = ContractState {
         code: build("NftItemMock"),
@@ -161,13 +172,16 @@ fun main() {
     println("wallet1 (owner1/feeWallet) = {}", wallet1.address);
     println("wallet2 (owner2)           = {}", wallet2.address);
 
+    val seed = runSeed(wallet1.address);
+    println("run seed = {}", seed);
+
     val walletCode = build("JettonWalletMock");
 
     // 1. Minter (fresh seed → jetton wallets start from zero).
     val minterInit = ContractState {
         code: build("JettonMinterMock"),
         data: MinterMockStorage {
-            seed: 88002,
+            seed: seed + 1,
             walletCode,
         }.toCell(),
     };
@@ -216,9 +230,9 @@ fun main() {
     );
 
     // 3. Two mock NFTs: nftA on side 1, nftB on side 2.
-    val nftA = deployNftMock(wallet1.address, wallet1.address, 88001);
+    val nftA = deployNftMock(wallet1.address, wallet1.address, seed);
     println("nftA (side 1) = {}", nftA);
-    val nftB = deployNftMock(wallet2.address, wallet2.address, 88003);
+    val nftB = deployNftMock(wallet2.address, wallet2.address, seed + 2);
     println("nftB (side 2) = {}", nftB);
 
     // 4. Registry order: side 1's NFTs, then side 2's NFTs, then jettons →
@@ -230,7 +244,7 @@ fun main() {
     assets.set(2, mkJetton(1, minter, DEAL_JETTON1));
     assets.set(3, mkJetton(2, minter, DEAL_JETTON2));
     val initStorage = Storage {
-        swapId: 90801,
+        swapId: seed,
         phase: PHASE_SETUP,
         owner1: wallet1.address,
         owner2: wallet2.address,
