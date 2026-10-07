@@ -129,13 +129,10 @@ get fun `test claim errors: index, value, phase`() {
     });
 }
 
-// The `a.received` check in handleClaimAsset's NFT branch: without it,
-// claim_asset could be called on a registry slot whose asset was never
-// deposited at all. Built with a real CANCELLED deal (not a synthetic
-// state) where one registered NFT slot is never deposited, so the slot is
-// in-range, in a valid claim phase, and claimed by its rightful depositor —
-// every other guard would let this claim through.
-get fun `test claim of a never-received NFT slot rejected NotClaimable`() {
+// In CANCELLED a never-received slot may be claimed by its side owner: the
+// item refuses a transfer from an escrow that does not own it, so the claim
+// moves nothing and the claimer loses only the attached value.
+get fun `test claim of a never-received NFT slot after cancel moves nothing`() {
     val o1 = testing.treasury("cl-nr-o1");
     val o2 = testing.treasury("cl-nr-o2");
     val fw = testing.treasury("cl-nr-fw");
@@ -153,11 +150,85 @@ get fun `test claim of a never-received NFT slot rejected NotClaimable`() {
     expect(sendNftToEscrow(o1, nft0, escrow.address, ton("0.2"), 0)).toHaveAllSuccessfulTxs();
     expect(escrow.sendText(o1.address, "cancel_swap", ton("0.1"))).toHaveAllSuccessfulTxs();
     expect(escrow.phase()).toEqual(PHASE_CANCELLED);
-    // Index 1: in range, CANCELLED phase (a valid claim phase), sender is the
-    // rightful depositor — but the asset was never received.
+    // Index 1: in range, CANCELLED phase, sender is the rightful depositor —
+    // but the escrow never owned nft1, so its transfer is refused (401) and
+    // the claim only bounces.
+    val res = sendClaim(o1.address, escrow.address, 1, ton("0.1"));
+    expect(res).toHaveBouncedTx({ to: escrow.address });
+    expect(readMockOwner(nft1)).toEqual(o1.address);
+}
+
+// An NFT sent to the deal with a forward too small to notify the escrow belongs
+// to the escrow but was never recorded. After cancel its side owner can pull
+// it back; the item itself refuses the transfer if the escrow does not own it.
+get fun `test an unrecorded NFT is claimed back after cancel`() {
+    val o1 = testing.treasury("cl-unrec-o1");
+    val o2 = testing.treasury("cl-unrec-o2");
+    val fw = testing.treasury("cl-unrec-fw");
+    val x = deployNft(o1, 81001);
+    val y = deployNft(o2, 81002);
+    var cfg = makeBasicConfig(o1, o2, fw);
+    var a: map<uint16, address> = [];
+    a.set(0, x);
+    var b: map<uint16, address> = [];
+    b.set(0, y);
+    cfg.nfts1 = a;
+    cfg.nfts1Count = 1;
+    cfg.nfts2 = b;
+    cfg.nfts2Count = 1;
+    val escrow = deployEscrow(o1, cfg);
+    sendNftToEscrow(o1, x, escrow.address, 1, 0); // one nanoton: never recorded
+    expect(escrow.receivedCounts()).toEqual((0, 0));
+    expect(readMockOwner(x)).toEqual(escrow.address);
+    val (_req, attach) = escrow.cancelCost();
+    expect(escrow.sendText(o1.address, "cancel_swap", attach)).toHaveAllSuccessfulTxs();
+    expect(sendClaim(o1.address, escrow.address, 0, ton("0.1"))).toHaveAllSuccessfulTxs();
+    expect(readMockOwner(x)).toEqual(o1.address);
+}
+
+// Outside cancel an unrecorded slot stays unclaimable: the recipient there is
+// the counterparty, who never deposited it.
+get fun `test an unrecorded NFT slot is not claimable while executing`() {
+    val o1 = testing.treasury("cl-exec-o1");
+    val o2 = testing.treasury("cl-exec-o2");
+    val fw = testing.treasury("cl-exec-fw");
+    val x = deployNft(o1, 81101);
+    val y = deployNft(o2, 81102);
+    var cfg = makeBasicConfig(o1, o2, fw);
+    var a: map<uint16, address> = [];
+    a.set(0, x);
+    var b: map<uint16, address> = [];
+    b.set(0, y);
+    cfg.nfts1 = a;
+    cfg.nfts1Count = 1;
+    cfg.nfts2 = b;
+    cfg.nfts2Count = 1;
+    var st = buildInitialStorage(cfg);
+    st.phase = PHASE_EXECUTING;
+    st.dist = DistState {
+        mode: DIST_EXECUTE,
+        cursor: 0,
+    }.toCell();
+    var s1 = st.assets.mustGet(1);
+    s1.received = true;
+    st.assets.set(1, s1);
+    st.received2Count = 1;
+    val escrow = SwapEscrowNosup.fromStorage(st);
     expect(
-        sendClaim(o1.address, escrow.address, 1, ton("0.1")),
-    ).toHaveFailedTx({ to: escrow.address, exitCode: Errors.NotClaimable });
+        net.send(
+            o1.address,
+            createMessage({
+                bounce: BounceMode.NoBounce,
+                value: ton("1"),
+                dest: { stateInit: escrow.stateInit! },
+                body: Excesses { queryId: 0 },
+            }),
+        ),
+    ).toHaveSuccessfulDeploy({ to: escrow.address });
+    expect(sendClaim(o2.address, escrow.address, 0, ton("0.1"))).toHaveFailedTx({
+        to: escrow.address,
+        exitCode: Errors.NotClaimable,
+    });
 }
 
 get fun `test cancelled deal: depositor claims own bounced NFT`() {
@@ -318,6 +389,225 @@ get fun `test jetton claim after an injected bounce`() {
 
     expect(sendClaim(f.o2.address, f.escrow.address, 0, ton("0.2"))).toHaveFailedTx({
         to: f.escrow.address,
+        exitCode: Errors.NotClaimable,
+    });
+}
+
+// Cross-side duplicate NFT address: the registry does not forbid listing the
+// same item on both sides. Case 1 — the escrow is holding the item because
+// side 1's recorded return bounced; side 2 also lists the same address, never
+// deposited there. Without the cross-side check, side 2's owner could claim
+// that unrecorded slot and take the item meant for side 1.
+get fun `test cross-side duplicate blocks an unrecorded claim: recorded on one side, unrecorded on the other`() {
+    val o1 = testing.treasury("cl-dup1-o1");
+    val o2 = testing.treasury("cl-dup1-o2");
+    val fw = testing.treasury("cl-dup1-fw");
+    val x = deployNft(o1, 82001);
+    var cfg = makeBasicConfig(o1, o2, fw);
+    var n1: map<uint16, address> = [];
+    n1.set(0, x);
+    var n2: map<uint16, address> = [];
+    n2.set(0, x); // same address again, on side 2 — never deposited there
+    cfg.nfts1 = n1;
+    cfg.nfts1Count = 1;
+    cfg.nfts2 = n2;
+    cfg.nfts2Count = 1;
+    val escrow = deployEscrow(o1, cfg);
+    expect(sendNftToEscrow(o1, x, escrow.address, ton("0.2"), 0)).toHaveAllSuccessfulTxs();
+    setReject(o1.address, x, true);
+    expect(escrow.sendText(o1.address, "cancel_swap", ton("0.1"))).toHaveBouncedTx({
+        to: escrow.address,
+    });
+    expect(escrow.phase()).toEqual(PHASE_CANCELLED);
+    // The item stops rejecting (the escrow is still its owner — the earlier
+    // return never actually delivered).
+    setReject(o1.address, x, false);
+    // Slot 1 (side 2) lists the same address but was never deposited there —
+    // the escrow is holding x for side 1's bounced return, not for side 2.
+    expect(sendClaim(o2.address, escrow.address, 1, ton("0.1"))).toHaveFailedTx({
+        to: escrow.address,
+        exitCode: Errors.NotClaimable,
+    });
+    expect(readMockOwner(x)).toEqual(escrow.address);
+    // Side 1's own (recorded) slot is unaffected by the check and still delivers.
+    expect(sendClaim(o1.address, escrow.address, 0, ton("0.1"))).toHaveAllSuccessfulTxs();
+    expect(readMockOwner(x)).toEqual(o1.address);
+}
+
+// Case 2 — same duplicate, but inside a batch-cancel mid-state: the cursor
+// sits exactly on the recorded slot (not yet behind it, so that slot is
+// correctly NotClaimable on its own), while the unrecorded duplicate on the
+// other side must also be refused rather than slipping through.
+get fun `test cross-side duplicate blocks an unrecorded claim: batch-cancel cursor on the recorded slot`() {
+    val o1 = testing.treasury("cl-dup2-o1");
+    val o2 = testing.treasury("cl-dup2-o2");
+    val fw = testing.treasury("cl-dup2-fw");
+    val x = deployNft(o1, 82101);
+    var cfg = makeBasicConfig(o1, o2, fw);
+    var n1: map<uint16, address> = [];
+    n1.set(0, x);
+    var n2: map<uint16, address> = [];
+    n2.set(0, x);
+    cfg.nfts1 = n1;
+    cfg.nfts1Count = 1;
+    cfg.nfts2 = n2;
+    cfg.nfts2Count = 1;
+    var st = buildInitialStorage(cfg);
+    st.phase = PHASE_CANCELLED;
+    st.dist = DistState {
+        mode: DIST_CANCEL,
+        cursor: 0,
+    }.toCell();
+    var s0 = st.assets.mustGet(0);
+    s0.received = true;
+    st.assets.set(0, s0);
+    st.received1Count = 1;
+    val escrow = SwapEscrowNosup.fromStorage(st);
+    // Ownership of the mock NFT moves to the escrow (SetNftOwner is test-only).
+    expect(
+        net.send(
+            o1.address,
+            createMessage({
+                bounce: BounceMode.NoBounce,
+                value: ton("0.05"),
+                dest: x,
+                body: SetNftOwner {
+                    queryId: 0,
+                    newOwner: escrow.address,
+                },
+            }),
+        ),
+    ).toHaveAllSuccessfulTxs();
+    expect(
+        net.send(
+            o1.address,
+            createMessage({
+                bounce: BounceMode.NoBounce,
+                value: ton("1"),
+                dest: { stateInit: escrow.stateInit! },
+                body: Excesses { queryId: 0 },
+            }),
+        ),
+    ).toHaveSuccessfulDeploy({ to: escrow.address });
+    // Slot 0 sits exactly at the cursor — `idx < cursor` is strict, so it is
+    // correctly not yet claimable on its own terms.
+    expect(sendClaim(o1.address, escrow.address, 0, ton("0.1"))).toHaveFailedTx({
+        to: escrow.address,
+        exitCode: Errors.NotClaimable,
+    });
+    // Slot 1 (side 2, unrecorded) must not hand out the same item either.
+    expect(sendClaim(o2.address, escrow.address, 1, ton("0.1"))).toHaveFailedTx({
+        to: escrow.address,
+        exitCode: Errors.NotClaimable,
+    });
+    expect(readMockOwner(x)).toEqual(escrow.address);
+}
+
+// Case 3 — both duplicate slots are unrecorded (the item was sent with a
+// forward too small to be recorded at all). Neither side can prove the item
+// was meant for it, so both are refused rather than letting whichever side
+// claims first win.
+get fun `test cross-side duplicate blocks an unrecorded claim: both sides unrecorded`() {
+    val o1 = testing.treasury("cl-dup3-o1");
+    val o2 = testing.treasury("cl-dup3-o2");
+    val fw = testing.treasury("cl-dup3-fw");
+    val x = deployNft(o1, 82201);
+    var cfg = makeBasicConfig(o1, o2, fw);
+    var n1: map<uint16, address> = [];
+    n1.set(0, x);
+    var n2: map<uint16, address> = [];
+    n2.set(0, x);
+    cfg.nfts1 = n1;
+    cfg.nfts1Count = 1;
+    cfg.nfts2 = n2;
+    cfg.nfts2Count = 1;
+    val escrow = deployEscrow(o1, cfg);
+    sendNftToEscrow(o1, x, escrow.address, 1, 0); // one nanoton: never recorded
+    val (_req, attach) = escrow.cancelCost();
+    expect(escrow.sendText(o1.address, "cancel_swap", attach)).toHaveAllSuccessfulTxs();
+    expect(escrow.phase()).toEqual(PHASE_CANCELLED);
+    expect(sendClaim(o2.address, escrow.address, 1, ton("0.1"))).toHaveFailedTx({
+        to: escrow.address,
+        exitCode: Errors.NotClaimable,
+    });
+    expect(readMockOwner(x)).toEqual(escrow.address);
+    expect(sendClaim(o1.address, escrow.address, 0, ton("0.1"))).toHaveFailedTx({
+        to: escrow.address,
+        exitCode: Errors.NotClaimable,
+    });
+    expect(readMockOwner(x)).toEqual(escrow.address);
+}
+
+// Guard: a duplicate address on the SAME side is not a cross-side duplicate
+// and must not block a legitimate unrecorded claim — the escrow holding the
+// item can only mean it belongs to that one shared owner either way.
+get fun `test a same-side duplicate NFT address does not block a legitimate unrecorded claim`() {
+    val o1 = testing.treasury("cl-dupsame-o1");
+    val o2 = testing.treasury("cl-dupsame-o2");
+    val fw = testing.treasury("cl-dupsame-fw");
+    val x = deployNft(o1, 82301);
+    var cfg = makeBasicConfig(o1, o2, fw);
+    var n1: map<uint16, address> = [];
+    n1.set(0, x);
+    n1.set(1, x); // same address twice, both on side 1 — harmless duplicate
+    cfg.nfts1 = n1;
+    cfg.nfts1Count = 2;
+    val escrow = deployEscrow(o1, cfg);
+    expect(sendNftToEscrow(o1, x, escrow.address, ton("0.2"), 0)).toHaveAllSuccessfulTxs();
+    setReject(o1.address, x, true);
+    expect(escrow.sendText(o1.address, "cancel_swap", ton("0.1"))).toHaveBouncedTx({
+        to: escrow.address,
+    });
+    setReject(o1.address, x, false);
+    expect(escrow.phase()).toEqual(PHASE_CANCELLED);
+    // Slot 1 lists the same address, never deposited there, but both slots
+    // belong to side 1 — not a cross-side duplicate, so the claim proceeds
+    // and genuinely delivers the item the escrow is still holding.
+    expect(sendClaim(o1.address, escrow.address, 1, ton("0.1"))).toHaveAllSuccessfulTxs();
+    expect(readMockOwner(x)).toEqual(o1.address);
+}
+
+// Guard: outside cancel, an unrecorded slot stays unclaimable regardless of
+// phase — DONE included, not just EXECUTING (already covered above).
+get fun `test an unrecorded NFT slot is not claimable after DONE`() {
+    val o1 = testing.treasury("cl-done-unrec-o1");
+    val o2 = testing.treasury("cl-done-unrec-o2");
+    val fw = testing.treasury("cl-done-unrec-fw");
+    val x = deployNft(o1, 82401);
+    val y = deployNft(o2, 82402);
+    var cfg = makeBasicConfig(o1, o2, fw);
+    var a: map<uint16, address> = [];
+    a.set(0, x);
+    var b: map<uint16, address> = [];
+    b.set(0, y);
+    cfg.nfts1 = a;
+    cfg.nfts1Count = 1;
+    cfg.nfts2 = b;
+    cfg.nfts2Count = 1;
+    var st = buildInitialStorage(cfg);
+    st.phase = PHASE_DONE;
+    st.dist = DistState {
+        mode: DIST_IDLE,
+        cursor: 0,
+    }.toCell();
+    var s1 = st.assets.mustGet(1);
+    s1.received = true;
+    st.assets.set(1, s1);
+    st.received2Count = 1;
+    val escrow = SwapEscrowNosup.fromStorage(st);
+    expect(
+        net.send(
+            o1.address,
+            createMessage({
+                bounce: BounceMode.NoBounce,
+                value: ton("1"),
+                dest: { stateInit: escrow.stateInit! },
+                body: Excesses { queryId: 0 },
+            }),
+        ),
+    ).toHaveSuccessfulDeploy({ to: escrow.address });
+    expect(sendClaim(o2.address, escrow.address, 0, ton("0.1"))).toHaveFailedTx({
+        to: escrow.address,
         exitCode: Errors.NotClaimable,
     });
 }

@@ -354,6 +354,12 @@ fun readMockOwner(nft: address): address {
     return net.runGetMethod(nft, "ownerAddr");
 }
 
+// Gas a top-up deposit carries for its own transaction. A top-up of exactly a
+// 0.00106 TON shortfall bought 15,917 gas and ran out; the top-up that
+// completes a 1x0 deal and runs its execution used 29,721 gas. 0.05 TON buys
+// 750,000 gas at today's price, over 25x that.
+const TOP_UP_GAS_VALUE = ton("0.05")
+
 // Full scenario: deploy an escrow with n1×n2 NFTs + GRAM amounts, submit all
 // deposits for both sides, verify auto-execution.
 // Reused by the parity matrix — hence it lives in the shared module rather
@@ -376,6 +382,7 @@ fun runFullSwap(
     gram1: coins,
     gram2: coins,
     forwardPerNft: coins = ton("0.05"),
+    topUp: bool = false,
 ): EscrowFixture {
     val o1 = testing.treasury("rf-o1");
     val o2 = testing.treasury("rf-o2");
@@ -439,6 +446,24 @@ fun runFullSwap(
     }
     lastRes = escrow.sendText(o2.address, "service_fee_owner2", SERVICE_FEE);
     expect(lastRes).toHaveAllSuccessfulTxs();
+    // A side whose own deposits cannot carry its half of the shared costs
+    // pays the rest as TON before the last deposits; what its NFT forwards
+    // then also cover comes back in its refund. The top-up also carries the
+    // gas of its own transaction (TOP_UP_GAS_VALUE): a shortfall can be
+    // smaller than the gas one deposit needs, and when the top-up is the last
+    // deposit it runs the execution. What it pays above the shortfall comes
+    // back in the same refund.
+    if (topUp) {
+        val (s1, s2) = escrow.executionShortfall();
+        if (s1 > 0) {
+            lastRes = escrow.sendText(o1.address, "deposit_ton1", s1 + TOP_UP_GAS_VALUE);
+            expect(lastRes).toHaveAllSuccessfulTxs();
+        }
+        if (s2 > 0) {
+            lastRes = escrow.sendText(o2.address, "deposit_ton2", s2 + TOP_UP_GAS_VALUE);
+            expect(lastRes).toHaveAllSuccessfulTxs();
+        }
+    }
     var r2 = nfts2.findFirst();
     while (r2.isFound) {
         lastRes = sendNftToEscrow(
@@ -467,7 +492,7 @@ fun runFullSwap(
         c2 = nfts2.iterateNext(c2);
     }
     // fee_wallet received at least serviceFee1+serviceFee2 (0.2 GRAM) out of
-    // the total feeTotal transfer within the cascade triggered by the last
+    // the 2 x SERVICE_FEE transfer within the cascade triggered by the last
     // deposit (lastRes contains the full executeSwap transaction tree —
     // GRAM/NFT/fee/refund/dust).
     expect(lastRes).toHaveTx({
@@ -477,6 +502,49 @@ fun runFullSwap(
         },
     });
     return escrow;
+}
+
+// An ACTIVE NFT deal whose side-1 registry has `n` entries. The first
+// `deposited` are real NFTs, deposited by owner 1 with a 0.05 forward and
+// their index hint; the rest are synthetic addresses that only give the
+// registry its size. No fee is paid, so nothing executes.
+struct ActiveRegistry {
+    escrow: EscrowFixture
+    o1: Treasury
+    o2: Treasury
+    fw: Treasury
+    nfts: map<uint16, address> // the deposited items, by registry index
+}
+
+fun deployActiveRegistry(tag: string, n: int, deposited: int, seedBase: int): ActiveRegistry {
+    val o1 = testing.treasury(tagged(tag, "-o1"));
+    val o2 = testing.treasury(tagged(tag, "-o2"));
+    val fw = testing.treasury(tagged(tag, "-fw"));
+    var entries: map<uint16, address> = [];
+    var nfts: map<uint16, address> = [];
+    var i = 0;
+    while (i < n) {
+        if (i < deposited) {
+            val nft = deployNft(o1, seedBase + i);
+            nfts.set(i as uint16, nft);
+            entries.set(i as uint16, nft);
+        } else {
+            entries.set(i as uint16, address.fromWorkchainAndHash(0, seedBase + i));
+        }
+        i += 1;
+    }
+    var cfg = makeBasicConfig(o1, o2, fw);
+    cfg.nfts1 = entries;
+    cfg.nfts1Count = n;
+    val escrow = deployEscrow(o1, cfg);
+    i = 0;
+    while (i < deposited) {
+        expect(
+            sendNftToEscrow(o1, nfts.mustGet(i as uint16), escrow.address, ton("0.05"), i),
+        ).toHaveAllSuccessfulTxs();
+        i += 1;
+    }
+    return ActiveRegistry { escrow, o1, o2, fw, nfts };
 }
 
 // ── Jetton mock helpers ──
@@ -802,10 +870,9 @@ fun runMixedSwap(
 // (1) the mocks are deployed by the deployer-owner (the normal path, with
 // addresses deterministic from {deployer, seed}); (2) the escrow address is
 // computed from the assembled Storage; (3) each NFT mock is sent
-// SetNftOwner(escrow); (4) the escrow is deployed with an empty transfer plus
-// a value margin for delivering the remainder (handlePlainTransfer from
-// owner1 only credits gram1Received — it does not touch the EXECUTING phase
-// or dist: tryAutoExecute is gated on phase == ACTIVE).
+// SetNftOwner(escrow); (4) the escrow is deployed with an `Excesses` message —
+// Excesses is credited silently in any phase, so the mid-state deploy does
+// not have to pass through a deposit handler to reach EXECUTING or CANCELLED.
 fun deployEscrowMidDistribution(
     deployer: Treasury,
     cfg: EscrowConfig,
@@ -862,12 +929,145 @@ fun deployEscrowMidDistribution(
         bounce: BounceMode.NoBounce,
         value: ton("10"),
         dest: { stateInit: escrow.stateInit! },
+        // Excesses is credited silently in any phase, so the escrow can be
+        // deployed straight into EXECUTING or CANCELLED without passing
+        // through a deposit handler.
+        body: Excesses { queryId: 0 },
     });
     expect(
         net.send(deployer.address, deployMessage),
     ).toHaveSuccessfulDeploy({ to: escrow.address });
     expect(net.runGetMethod<int>(escrow.address, "phase")).toEqual(execPhase);
     return escrow;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// A synthetic check of the GASCONSUMED safeguard (BATCH_GAS_SOFT_CAP=600000).
+// The cancel cursor walks the ENTIRE registry (not just received assets),
+// skipping unreceived assets (received=false) WITHOUT sending — but every
+// skip still costs gas (assets.mustGet — a dict lookup). A long tail of
+// unreceived entries exhausts the soft cap ON ITS OWN, before the cursor
+// even reaches the actually received (received=true) assets in the tail of
+// the registry — the batch must stop (preserving the cursor, NOT failing on
+// gas) and finish on the next continue. Construction: a skip zone of "empty"
+// entries (a dummy address — received=false, sendAsset is never called, so
+// the address does not need to be a real NFT contract — no actual deploy of
+// that many NFTs is required) + a tail of real NFTs (received=true, actually
+// delivered to the depositor on cancel).
+// ─────────────────────────────────────────────────────────────────────────
+
+struct SparseCancelFixture {
+    escrow: EscrowFixture
+    o1: Treasury
+    o2: Treasury
+    fw: Treasury
+    tailNfts: map<uint16, address>
+}
+
+// `distinctSkip`: give every skip entry its own address. With one shared
+// address the skip entries are identical cells and the account's stored size
+// is deduplicated to a fraction of a real registry's, which matters wherever
+// the storage fee is measured. `deployValue` is the escrow's starting balance.
+fun deploySparseCancelMidState(
+    tag: string,
+    skipCount: int,
+    tailCount: int,
+    distinctSkip: bool = false,
+    deployValue: coins = ton("5"),
+): SparseCancelFixture {
+    val o1 = testing.treasury(tagged(tag, "-o1"));
+    val o2 = testing.treasury(tagged(tag, "-o2"));
+    val fw = testing.treasury(tagged(tag, "-fw"));
+    val dummy = testing.treasury(tagged(tag, "-dummy"));
+
+    // Skip zone: "empty" side-1 entries, all pointing at ONE dummy address
+    // unless distinctSkip (never dereferenced — received=false, sendAsset is
+    // not called).
+    var nfts1: map<uint16, address> = [];
+    var i = 0;
+    while (i < skipCount) {
+        nfts1.set(
+            i as uint16,
+            distinctSkip ? address.fromWorkchainAndHash(0, 0x5100000 + i) : dummy.address,
+        );
+        i += 1;
+    }
+    // Tail: real side-2 NFTs — the only ones that will actually be sent.
+    var tailNfts: map<uint16, address> = [];
+    var j = 0;
+    while (j < tailCount) {
+        tailNfts.set(j as uint16, deployNft(o1, 80000 + j));
+        j += 1;
+    }
+    val cfg = EscrowConfig {
+        owner1: o1.address,
+        owner2: o2.address,
+        feeWallet: fw.address,
+        nfts1,
+        nfts1Count: skipCount,
+        nfts2: tailNfts,
+        nfts2Count: tailCount,
+        gram1Amount: 0,
+        gram2Amount: 0,
+        jettons: [],
+        jettonsCount: 0,
+    };
+    var st = buildInitialStorage(cfg);
+    // buildInitialStorage already sets received=false for ALL assets — exactly
+    // what the skip zone needs. The tail (the last tailCount entries — nfts2)
+    // is flipped to received=true: as if side 2 actually deposited its
+    // assets while side 1 (skipCount dummy entries) did not (the deal is
+    // cancelled while side 1 still hasn't finished the registry — a typical
+    // "broken chain" scenario).
+    val total = st.assetsCount as int;
+    var k = skipCount;
+    while (k < total) {
+        var a = st.assets.mustGet(k as uint16);
+        a.received = true;
+        st.assets.set(k as uint16, a);
+        k += 1;
+    }
+    st.received2Count = tailCount as uint16;
+    st.phase = PHASE_CANCELLED;
+    st.dist = DistState {
+        mode: DIST_CANCEL,
+        cursor: 0,
+    }.toCell();
+
+    val escrow = SwapEscrowNosup.fromStorage(st);
+
+    // Transfer ownership of the tail NFTs to the escrow (a test opcode,
+    // SetNftOwner, as in deployEscrowMidDistribution) — the skip zone uses a
+    // single dummy address and is never dereferenced by the contract, so
+    // real mock contracts for the skip zone are NOT needed (saves wall time).
+    var r = tailNfts.findFirst();
+    while (r.isFound) {
+        val m = createMessage({
+            bounce: false,
+            value: ton("0.05"),
+            dest: r.loadValue(),
+            body: SetNftOwner {
+                queryId: 0,
+                newOwner: escrow.address,
+            },
+        });
+        expect(net.send(o1.address, m)).toHaveAllSuccessfulTxs();
+        r = tailNfts.iterateNext(r);
+    }
+
+    val deployMessage = createMessage({
+        bounce: false,
+        value: deployValue,
+        dest: { stateInit: escrow.stateInit! },
+        // Excesses is credited silently in any phase, so the escrow can be
+        // deployed straight into EXECUTING or CANCELLED without passing
+        // through a deposit handler.
+        body: Excesses { queryId: 0 },
+    });
+    expect(net.send(o1.address, deployMessage)).toHaveSuccessfulDeploy({ to: escrow.address });
+    expect(escrow.phase()).toEqual(PHASE_CANCELLED);
+
+    return SparseCancelFixture { escrow, o1, o2, fw, tailNfts };
 }
 
 // ── Shared bounce/claim fixtures, used by both tests/nosup/bounce.test.tolk

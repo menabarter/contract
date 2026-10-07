@@ -19,6 +19,7 @@
 
 import "@acton/tolk-stdlib/gas-payments"
 import "messages"
+import "nosup/accounting"
 import "nosup/messages"
 import "nosup/storage"
 
@@ -140,24 +141,76 @@ fun execGasReserve(sends: int): coins {
     return calculateGasFee(BASECHAIN, EXEC_GAS_UNITS_BASE + EXEC_GAS_UNITS_PER_SEND * sends);
 }
 
-// Extra gas reserve for the additional transactions in the batch chain for
-// finalizing the cancel path. Same formula as gasReserveForSwap (execute
-// path): ceil(sends/K) surcharges — one per batch of assets beyond the
-// first, PLUS a separate final transaction (see runDistributionBatch). No
-// surcharge for <=100 sends (fast path is single-transaction).
-// The result MUST feed into the asserted `required` value of cancel's
-// balance check, or a long chain will come up short on gas for its trailing
-// batches.
-fun batchExtraReserve(sends: int): coins {
-    if (sends <= FAST_PATH_MAX_ASSETS) {
+// Value of the self-addressed continue message: the gas it must buy plus its
+// own forwarding fee (mode 0 takes the fee out of the value).
+fun continueMsgValue(): coins {
+    return calculateGasFee(BASECHAIN, CONTINUE_GAS_UNITS) + calculateForwardFee(BASECHAIN, 1023, 1);
+}
+
+// The smallest amount a plain message can safely carry: two forward fees. A
+// refund goes out in mode 0 and pays its own forwarding out of its value: a
+// plain message with no body costs the lump price
+// (calculateForwardFee(BASECHAIN, 0, 0), measured 66,667 nanoton), so an
+// amount below that fails the whole action phase (result code 37) and aborts
+// the transaction that carries it. Two forward fees, because the cancel
+// finale splits its leftover in halves that must each pay their own
+// forwarding. The cancel's initiating transaction uses this bound for its
+// refunds and surplus (pinned in tests/nosup/cancel_refund_min.test.tolk).
+fun sendableMinimum(): coins {
+    return calculateForwardFee(BASECHAIN, 0, 0) * 2;
+}
+
+// The smallest refund worth a message of its own on execute and in the cancel
+// finale. Amounts up to DUST (22x sendableMinimum today) are not worth a
+// message and go to the fee wallet with the sweep; the larger of the two
+// bounds holds if forward prices rise. Pinned in
+// tests/nosup/storage_floor.test.tolk (cancel finale) and
+// tests/nosup/execute_refund_min.test.tolk (execute).
+fun refundMinimum(): coins {
+    val sendable = sendableMinimum();
+    return sendable > DUST ? sendable : DUST;
+}
+
+// Gas for the batch chain beyond its first transaction, by the work it does:
+// a base per batch, plus walking past every entry that is not sent. Sends are
+// priced separately (execGasReserve on execute; the per-send term in
+// quoteCancel on cancel). On cancel the walk of the first batch is also inside
+// the initiating transaction's units, so it is counted twice: at most
+// CONTINUE_GAS_UNITS, on the safe side. A chain limited by sends needs
+// ceil(sends / BATCH_MAX_SENDS) batches; one limited by skipping needs as many
+// as the walk takes at BATCH_GAS_SOFT_CAP per batch. No chain for <= 100.
+fun batchChainReserve(registrySize: int, sends: int): coins {
+    if (registrySize <= FAST_PATH_MAX_ASSETS) {
         return 0;
     }
-    val batches = (sends + BATCH_MAX_SENDS - 1) / BATCH_MAX_SENDS;
-    // `batches` is a ceiling division: (n + K - 1) / K. Multiplying the batch
-    // COUNT by the per-batch gas cost is the intended arithmetic — multiplying
-    // before dividing would compute a different quantity entirely.
+    val walkUnits = SKIP_GAS_UNITS_PER_ENTRY * (registrySize - sends);
+    // ceiling divisions: the batch COUNT times the per-batch base is the
+    // intended arithmetic.
     // check-disable-next-line divide-before-multiply
-    return calculateGasFee(BASECHAIN, BATCH_EXTRA_GAS_UNITS * batches);
+    val batches = (sends + BATCH_MAX_SENDS - 1) / BATCH_MAX_SENDS +
+        (walkUnits + BATCH_GAS_SOFT_CAP - 1) / BATCH_GAS_SOFT_CAP;
+    return calculateGasFee(BASECHAIN, BATCH_EXTRA_GAS_UNITS * batches + walkUnits);
+}
+
+// Messages execution sends besides the assets: fee wallet, refund1, refund2
+// and one per TON leg.
+fun numExtraSends(g: GramState): int {
+    var numExtra = 3;
+    if (g.gram1Amount > 0) {
+        numExtra += 1;
+    }
+    if (g.gram2Amount > 0) {
+        numExtra += 1;
+    }
+    return numExtra;
+}
+
+// Gas units the execution transaction itself may use; gasReserveForSwap
+// prices exactly these units, so the reserve and the gas limit set from it
+// cannot drift apart.
+fun Storage.executionGasUnits(self, g: GramState): int {
+    return EXEC_GAS_UNITS_BASE +
+        EXEC_GAS_UNITS_PER_SEND * ((self.assetsCount as int) + numExtraSends(g));
 }
 
 // The gas-reserve and minimum-balance formulas are computed from the deal's
@@ -167,28 +220,9 @@ fun batchExtraReserve(sends: int): coins {
 // deposit could pass or fail depending on ordering.
 fun Storage.gasReserveForSwap(self, g: GramState): coins {
     val totalNfts = self.assetsCount as int;
-    var numExtra = 3; // fee_wallet + refund1 + refund2
-    if (g.gram1Amount > 0) {
-        numExtra += 1;
-    }
-    if (g.gram2Amount > 0) {
-        numExtra += 1;
-    }
-    var reserve = execGasReserve(totalNfts + numExtra);
-    // For <=100 assets there is no chain surcharge. Larger deals use the
-    // batch chain:
-    if (totalNfts > FAST_PATH_MAX_ASSETS) {
-        // Additional chain transactions: ceil(n/K) batches of assets (the
-        // first rides along in the last deposit's transaction, whose base is
-        // already in execGasReserve) minus 1, PLUS a separate final
-        // transaction — exactly ceil(n/K) surcharges in total.
-        val batches = (totalNfts + BATCH_MAX_SENDS - 1) / BATCH_MAX_SENDS;
-        // `batches` is a ceiling division: (n + K - 1) / K. Multiplying the batch
-        // COUNT by the per-batch gas cost is the intended arithmetic — multiplying
-        // before dividing would compute a different quantity entirely.
-        // check-disable-next-line divide-before-multiply
-        reserve += calculateGasFee(BASECHAIN, BATCH_EXTRA_GAS_UNITS * batches);
-    }
+    var reserve = calculateGasFee(BASECHAIN, self.executionGasUnits(g));
+    // Execution sends every asset, so nothing is skipped: sends == registrySize.
+    reserve += batchChainReserve(totalNfts, totalNfts);
     return reserve;
 }
 
@@ -208,10 +242,50 @@ fun Storage.assetTransferCost(self): coins {
 }
 
 fun Storage.minBalanceForSwap(self, g: GramState): coins {
-    return g.gram1Amount + g.gram2Amount + g.serviceFee1 + g.serviceFee2 +
-        self.assetTransferCost() +
-        self.gasReserveForSwap(g) +
-        DUST;
+    return g.gram1Amount + g.gram2Amount + SERVICE_FEE * 2 + self.assetTransferCost() +
+        self.sharedCosts(g);
+}
+
+// What the deal spends that belongs to neither side alone: execution gas, the
+// dust margin and a year of storage. Shared equally.
+fun Storage.sharedCosts(self, g: GramState): coins {
+    return self.gasReserveForSwap(g) + DUST + self.storageFloor();
+}
+
+// One year of storage fees for this deal's state, modelled from the registry
+// size (see STORAGE_FLOOR_SECONDS). A settled escrow keeps this much on its
+// balance so it does not freeze while claim_asset may still be needed.
+fun Storage.storageFloor(self): coins {
+    val n = self.assetsCount as int;
+    return calculateStorageFee(
+        BASECHAIN,
+        STORAGE_FLOOR_SECONDS,
+        STORAGE_BITS_BASE + STORAGE_BITS_PER_ASSET * n,
+        STORAGE_CELLS_BASE + STORAGE_CELLS_PER_ASSET * n,
+    );
+}
+
+// What `side` must have paid before the deal can execute: its TON leg, its
+// service fee, the transfer of its own assets and half of the shared costs.
+// The two shares sum to minBalanceForSwap; side 2 takes the odd nanoton.
+fun Storage.sideShare(self, g: GramState, side: int, ownCost: coins): coins {
+    val shared = self.sharedCosts(g);
+    val half: coins = side == 1 ? shared / 2 : shared - shared / 2;
+    val leg = side == 1 ? g.gram1Amount : g.gram2Amount;
+    return leg + SERVICE_FEE + ownCost + half;
+}
+
+// Uses the received counters, so only meaningful once every asset has arrived
+// (canAutoExecute and execute_swap check that first).
+fun Storage.sideFunded(self, g: GramState, side: int): bool {
+    return paidBy(g, side) >= self.sideShare(g, side, self.ownTransferCost(side));
+}
+
+// The per-side counters include deposit gas (credited gross), so they can say
+// "funded" while the balance is short; this check is what guarantees the
+// action phase can pay for everything execution sends.
+fun Storage.balanceCovers(self, g: GramState, committedOut: coins): bool {
+    return contract.getOriginalBalance() - committedOut >= self.minBalanceForSwap(g);
 }
 
 // contract.getOriginalBalance() (common.tolk:363) — the contract's balance
@@ -241,7 +315,10 @@ fun Storage.canAutoExecute(self, committedOut: coins): bool {
     if (g.serviceFee2 < SERVICE_FEE) {
         return false;
     }
-    return contract.getOriginalBalance() - committedOut >= self.minBalanceForSwap(g);
+    if (!self.sideFunded(g, 1) || !self.sideFunded(g, 2)) {
+        return false;
+    }
+    return self.balanceCovers(g, committedOut);
 }
 
 // ── Fast-path / batch-path gate ──
@@ -260,7 +337,7 @@ fun Storage.executeSwap(mutate self, committedOut: coins) {
         mode: DIST_EXECUTE,
         cursor: 0,
     }.toCell();
-    self.runDistributionBatch();
+    self.runDistributionBatch(committedOut);
 }
 
 // ── Recipient addressing and sending a single asset ──
@@ -319,7 +396,10 @@ fun sendAsset(a: Asset, idx: int, dest: address, resp: address) {
 //   cursor<n                -> continue;
 //   cursor>=n, sends>0      -> continue (finalize in the next transaction);
 //   cursor>=n, sends==0     -> FINALIZE.
-fun Storage.runDistributionBatch(mutate self) {
+// `queued` is value this transaction queued before the batch;
+// getOriginalBalance() does not reflect it, so a finale in the same
+// transaction must subtract it.
+fun Storage.runDistributionBatch(mutate self, queued: coins) {
     var d = self.dist.load();
     if (d.mode == DIST_IDLE) {
         return;
@@ -340,12 +420,12 @@ fun Storage.runDistributionBatch(mutate self) {
     }
 
     if ((d.cursor as int) >= n && sends == 0) {
-        self.finalizeDistribution(d.mode as int);
+        self.finalizeDistribution(d.mode as int, queued);
         d.mode = DIST_IDLE;
     } else {
         val m = createMessage({
             bounce: BounceMode.Only256BitsOfBody,
-            value: CONTINUE_MSG_VALUE,
+            value: continueMsgValue(),
             dest: contract.getAddress(),
             body: ContinueDistribution { queryId: d.cursor as int },
         });
@@ -358,37 +438,31 @@ fun Storage.runDistributionBatch(mutate self) {
 // Called ONLY from a batch that sent no assets (see runDistributionBatch,
 // the sends == 0 gate): getOriginalBalance() here already reflects
 // the spending of all previous batches, so the refund is honestly computed
-// FROM THE CURRENT balance, and execGasReserve(numExtra) covers
-// the actual finalization (≤6 messages). DIST_EXECUTE: GRAM exchange,
-// fee, pro-rata refund, dust sweep, DONE. DIST_CANCEL: sweep only (the GRAM
-// refunds already went out in the initiating transaction).
-fun Storage.finalizeDistribution(mutate self, mode: int) {
+// FROM THE CURRENT balance. DIST_EXECUTE: GRAM exchange, fee, refunds, dust
+// sweep, DONE; execGasReserve(numExtraSends(g)) covers this finalization (≤6
+// messages). DIST_CANCEL: the refunds already went out in the initiating
+// transaction; what the chain did not spend is split equally, then the dust
+// sweep; this branch prices its own gas from what the transaction has
+// consumed so far, since the batch before it may have walked the registry.
+// Both branches keep the storage floor on the balance.
+fun Storage.finalizeDistribution(mutate self, mode: int, queued: coins) {
     if (mode == DIST_EXECUTE) {
         self.phase = PHASE_DONE;
         val g = self.grams.load();
-        val feeTotal = g.serviceFee1 + g.serviceFee2;
-        val explicitOut = g.gram1Amount + g.gram2Amount + feeTotal;
-        var numExtra = 3;
-        if (g.gram1Amount > 0) {
-            numExtra += 1;
-        }
-        if (g.gram2Amount > 0) {
-            numExtra += 1;
-        }
-        var available = contract.getOriginalBalance() - explicitOut - execGasReserve(numExtra) -
-            DUST;
-        if (available < 0) {
-            available = 0;
-        }
-        val contrib1 = g.gram1Received + g.gram1DepositReserve;
-        val contrib2 = g.gram2Received + g.gram2DepositReserve;
-        val totalContrib = contrib1 + contrib2;
-        var refund1: coins = 0;
-        var refund2: coins = 0;
-        if (totalContrib > 0 && available > 0) {
-            refund1 = available * contrib1 / totalContrib;
-            refund2 = available - refund1; // strict pro-rata
-        }
+        val fees = SERVICE_FEE * 2;
+        // Asset transfers went out in earlier batches, so the balance already
+        // reflects them; R is what is left after anything this transaction
+        // already queued, the legs, the fee, this transaction's gas and the
+        // dust margin.
+        val r = contract.getOriginalBalance() - queued - g.gram1Amount - g.gram2Amount - fees -
+            execGasReserve(numExtraSends(g)) -
+            DUST -
+            self.storageFloor();
+        val (refund1, refund2) = splitRefunds(
+            r,
+            paidBy(g, 1) - g.gram1Amount - SERVICE_FEE - self.ownTransferCost(1),
+            paidBy(g, 2) - g.gram2Amount - SERVICE_FEE - self.ownTransferCost(2),
+        );
         if (g.gram2Amount > 0) {
             createMessage({ bounce: BounceMode.NoBounce, value: g.gram2Amount, dest: self.owner1 }).send(
                 SEND_MODE_REGULAR,
@@ -399,37 +473,71 @@ fun Storage.finalizeDistribution(mutate self, mode: int) {
                 SEND_MODE_REGULAR,
             );
         }
-        if (feeTotal > 0) {
-            createMessage({ bounce: BounceMode.NoBounce, value: feeTotal, dest: self.feeWallet }).send(
-                SEND_MODE_REGULAR,
-            );
-        }
-        if (refund1 > 0) {
+        createMessage({ bounce: BounceMode.NoBounce, value: fees, dest: self.feeWallet }).send(
+            SEND_MODE_REGULAR,
+        );
+        // A refund below refundMinimum is not sent: below one forward fee it
+        // would fail the action phase and abort the whole finale; it stays on
+        // the balance and goes to the fee wallet with the sweep, as sub-dust
+        // amounts do on cancel.
+        val minRefund = refundMinimum();
+        if (refund1 >= minRefund) {
             createMessage({ bounce: BounceMode.NoBounce, value: refund1, dest: self.owner1 }).send(
                 SEND_MODE_REGULAR,
             );
         }
-        if (refund2 > 0) {
+        if (refund2 >= minRefund) {
             createMessage({ bounce: BounceMode.NoBounce, value: refund2, dest: self.owner2 }).send(
                 SEND_MODE_REGULAR,
             );
         }
+        // Keep a year of storage on the escrow; the sweep carries everything above it.
+        reserveGramsOnBalance(self.storageFloor(), RESERVE_MODE_AT_MOST);
         // SAFETY: last statement of the DIST_EXECUTE branch (phase is already
         // PHASE_DONE and every computed payout above — gram legs, service
-        // fee, pro-rata refunds — has been sent). What remains on the
-        // balance is only the unused portion of the gas reserve, so
-        // draining it here is the intended dust settlement to feeWallet.
+        // fee, both refunds that reach refundMinimum — has been sent). The
+        // refunds split everything except this transaction's gas reserve,
+        // DUST and the storage floor; the floor is reserved first, so what the
+        // sweep carries is the unused part of that gas reserve plus DUST, plus
+        // any refund below refundMinimum — the intended settlement to
+        // feeWallet.
         createMessage({ bounce: BounceMode.NoBounce, value: 0, dest: self.feeWallet }).send(
             SEND_MODE_CARRY_ALL_BALANCE,
         );
         return;
     }
     if (mode == DIST_CANCEL) {
-        // SAFETY: DIST_CANCEL only reaches this branch to run the dust
-        // sweep — GRAM-side refunds for a cancelled distribution were
-        // already sent in the transaction that initiated the cancel, not
-        // here. This call has no other obligation to fund, so handing the
-        // whole remaining balance to feeWallet is correct.
+        // What the chain did not spend — unused batch gas, the value of any
+        // kick — belongs to both sides equally. `queued` is what this same
+        // transaction already queued (the surplus and refunds, when a batch
+        // cancel finalizes in its initiating transaction); the balance at the
+        // start of the transaction still includes it. This transaction's own
+        // gas is what it has used so far plus the finale's sends; when the
+        // batch walked the registry before finishing, that is far more than
+        // the finale alone.
+        val ownGas = calculateGasFee(
+            BASECHAIN,
+            getGasConsumedAtTheMoment() + EXEC_GAS_UNITS_BASE + EXEC_GAS_UNITS_PER_SEND * 3,
+        );
+        val leftover = contract.getOriginalBalance() - queued - ownGas - DUST - self.storageFloor();
+        // Split only an amount worth two messages (refundMinimum): a smaller
+        // leftover would fail the whole action phase (a 1-nanoton leftover:
+        // result code 37) or is not worth splitting, and goes to the sweep.
+        if (leftover > refundMinimum()) {
+            val half = leftover / 2;
+            createMessage({ bounce: BounceMode.NoBounce, value: half, dest: self.owner1 }).send(
+                SEND_MODE_REGULAR,
+            );
+            val rest = leftover - half;
+            createMessage({ bounce: BounceMode.NoBounce, value: rest, dest: self.owner2 }).send(
+                SEND_MODE_REGULAR,
+            );
+        }
+        // Keep a year of storage on the escrow; the sweep carries everything above it.
+        reserveGramsOnBalance(self.storageFloor(), RESERVE_MODE_AT_MOST);
+        // SAFETY: the refunds went out in the initiating transaction and the
+        // leftover has just been split (or is sub-dust); the floor is reserved
+        // first, so the sweep carries only the dust margin above it.
         createMessage({ bounce: BounceMode.NoBounce, value: 0, dest: self.feeWallet }).send(
             SEND_MODE_CARRY_ALL_BALANCE,
         );
@@ -443,27 +551,21 @@ fun Storage.executeSwapSingleTx(mutate self, committedOut: coins) {
     self.phase = PHASE_DONE;
     val g = self.grams.load();
 
-    val feeTotal = g.serviceFee1 + g.serviceFee2;
-    val explicitOut = g.gram1Amount + g.gram2Amount + self.assetTransferCost() + feeTotal;
+    val fees = SERVICE_FEE * 2;
+    val explicitOut = g.gram1Amount + g.gram2Amount + self.assetTransferCost() + fees;
     val gasReserve = self.gasReserveForSwap(g);
 
-    var available = contract.getOriginalBalance() - committedOut - explicitOut - gasReserve - DUST;
-    if (available < 0) {
-        available = 0;
-    }
-
-    // Strict pro-rata: refund2 is the remainder of available, NOT a
-    // second proportional computation (otherwise rounding could drift by 1
-    // nanoton and "lose"/"create" TON relative to available).
-    val contrib1 = g.gram1Received + g.gram1DepositReserve;
-    val contrib2 = g.gram2Received + g.gram2DepositReserve;
-    val totalContrib = contrib1 + contrib2;
-    var refund1: coins = 0;
-    var refund2: coins = 0;
-    if (totalContrib > 0 && available > 0) {
-        refund1 = available * contrib1 / totalContrib;
-        refund2 = available - refund1;
-    }
+    // R: the actual balance minus everything this transaction sends besides
+    // the refunds (TON legs, asset transfers, the fee, any value an earlier
+    // step of this same transaction queued as committedOut), minus this
+    // transaction's own gas, the dust margin and the storage floor.
+    val r = contract.getOriginalBalance() - committedOut - explicitOut - gasReserve - DUST -
+        self.storageFloor();
+    val (refund1, refund2) = splitRefunds(
+        r,
+        paidBy(g, 1) - g.gram1Amount - SERVICE_FEE - self.ownTransferCost(1),
+        paidBy(g, 2) - g.gram2Amount - SERVICE_FEE - self.ownTransferCost(2),
+    );
 
     // 1. GRAM exchange: each side receives the amount deposited by the
     // OPPOSITE side.
@@ -567,42 +669,57 @@ fun Storage.executeSwapSingleTx(mutate self, committedOut: coins) {
         }
     }
 
-    // 3. Service fee — combined into a single transfer.
-    if (feeTotal > 0) {
-        createMessage({ bounce: BounceMode.NoBounce, value: feeTotal, dest: self.feeWallet }).send(
-            SEND_MODE_REGULAR,
-        );
-    }
+    // 3. Service fee: exactly SERVICE_FEE per side. Anything a side paid above
+    // that is part of its contribution and comes back in its refund.
+    createMessage({ bounce: BounceMode.NoBounce, value: fees, dest: self.feeWallet }).send(
+        SEND_MODE_REGULAR,
+    );
 
-    // 4. Pro-rata refunds.
-    if (refund1 > 0) {
+    // 4. Refunds. A refund below refundMinimum is not sent: below one forward
+    // fee it would fail the action phase and abort the whole execution; it
+    // stays on the balance and goes to the fee wallet with the sweep, as
+    // sub-dust amounts do on cancel.
+    val minRefund = refundMinimum();
+    if (refund1 >= minRefund) {
         createMessage({ bounce: BounceMode.NoBounce, value: refund1, dest: self.owner1 }).send(
             SEND_MODE_REGULAR,
         );
     }
-    if (refund2 > 0) {
+    if (refund2 >= minRefund) {
         createMessage({ bounce: BounceMode.NoBounce, value: refund2, dest: self.owner2 }).send(
             SEND_MODE_REGULAR,
         );
     }
 
     // 5. Dust sweep — sent LAST: whatever is physically left on the balance
-    // after all the messages above (rounding, leftovers) goes to feeWallet
-    // via mode 128 (CARRY_ALL_BALANCE).
+    // above the reserved storage floor after all the messages above (the
+    // unused part of the gas reserve, DUST and any refund below
+    // refundMinimum) goes to feeWallet via mode 128 (CARRY_ALL_BALANCE).
+    // Keep a year of storage on the escrow; the sweep carries everything above it.
+    reserveGramsOnBalance(self.storageFloor(), RESERVE_MODE_AT_MOST);
     // SAFETY: step 5 of 5 in this function — every asset/NFT/jetton
-    // transfer, the service fee, and both pro-rata refunds (steps 1-4
-    // above) have already been sent, and this is the function's final
-    // statement. Only rounding leftovers remain on the balance, so
-    // sweeping them to feeWallet here is safe.
+    // transfer, the service fee, and both refunds that reach refundMinimum
+    // (steps 1-4 above) have already been sent, and this is the function's
+    // final statement. The refunds split everything except the gas reserve,
+    // DUST and the floor; the floor is reserved first, so the sweep carries
+    // only what is above it.
     createMessage({ bounce: BounceMode.NoBounce, value: 0, dest: self.feeWallet }).send(
         SEND_MODE_CARRY_ALL_BALANCE,
     );
 }
 
-// Called after every deposit/service-fee, BEFORE save() in each handler
-// (the ordering is already set — not rearranged here).
+// Called after a deposit or fee has been credited. Execution gas comes from
+// the reserve canAutoExecute has just confirmed is on the balance, not from
+// the value of the message that completed the deal: a deposit's forward is
+// sized for recording one asset. SETGASLIMIT caps the limit at what the
+// balance can buy.
+// Kept inline: as a separate procedure this reshuffles all of Storage's
+// fields on the stack on every call, whether or not the branch fires, so
+// every deposit's auto-execute check would pay for a call it mostly skips.
+@inline
 fun Storage.tryAutoExecute(mutate self, committedOut: coins) {
     if (self.canAutoExecute(committedOut)) {
+        setGasLimit(self.executionGasUnits(self.grams.load()));
         self.executeSwap(committedOut);
     }
 }
@@ -617,15 +734,11 @@ fun Storage.tryAutoExecute(mutate self, committedOut: coins) {
 // deal — auto-execution is not limited to the text deposit commands. It runs
 // behind the full canAutoExecute gate (the same phase/received/gram/fee/
 // balance checks as everywhere else), but it is observable at the wire level
-// and worth knowing about.
+// and worth knowing about. Outside SETUP and ACTIVE an owner's bare transfer
+// bounces.
 fun handlePlainTransfer(sender: address, value: coins) {
     var st = Storage.load();
-    var g = st.grams.load();
-    if (sender == st.owner1) {
-        g.gram1Received += value;
-    } else if (sender == st.owner2) {
-        g.gram2Received += value;
-    } else {
+    if (sender != st.owner1 && sender != st.owner2) {
         // Funded by the incoming message's own value (mode 64), NOT from the
         // balance — the same idiom as returnForeignNft / returnJettons below.
         // Forwarding the full `value` under SEND_MODE_REGULAR would make every
@@ -643,6 +756,16 @@ fun handlePlainTransfer(sender: address, value: coins) {
         fwd.send(SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE);
         return;
     }
+    // An owner's bare transfer is a TON deposit and follows the same phase
+    // rule as deposit_ton1/2: once the deal is finalized it bounces back
+    // instead of landing on a balance that nothing can pay out.
+    assert (st.phase == PHASE_ACTIVE || st.phase == PHASE_SETUP) throw Errors.AlreadyFinalized;
+    var g = st.grams.load();
+    if (sender == st.owner1) {
+        g.gram1Received += value;
+    } else {
+        g.gram2Received += value;
+    }
     st.grams = g.toCell();
     st.tryAutoExecute(0);
     st.save();
@@ -657,13 +780,14 @@ fun handlePlainTransfer(sender: address, value: coins) {
 // yet resolved. The sender is deliberately not gated — instead, the caller
 // supplies the value for the provide sends.
 //
-// That pairing is the point. Funding the provide sends from the CONTRACT'S
-// BALANCE without checking the caller's value opens a griefing vector: with
-// SETUP stuck because a minter stays silent, a third party can drain the
-// owners' GRAM deposits toward that dead minter using cheap (~0.001 TON)
-// deploy_fee calls, each costing the escrow ~0.08 TON at 100 positions, since
-// every call re-sends the full distribution. So the caller pays, enforced by
-// an assert BEFORE the distribution.
+// That pairing is the point. The caller must cover BOTH the provide sends
+// AND the gas this call itself burns walking the registry to find them
+// (DEPLOY_BASE_GAS_UNITS + DEPLOY_GAS_UNITS_PER_ASSET × assetsCount, see
+// storage.tolk) — checked by an assert BEFORE the distribution. Without the
+// scan share, a registry minter that keeps the provide value and never
+// answers lets a third party turn repeated, fully-funded deploy_fee calls
+// into a drain on the owners' GRAM deposits: each call is paid for exactly
+// on its provide sends, but the escrow's own balance quietly foots the scan.
 // perMinterProvideValue must match byte-for-byte
 // the formula in tests/escrow_helpers.tolk:deployEscrow (the same
 // PROVIDE_WALLET_VALUE + calculateGasFee(BASECHAIN,
@@ -718,7 +842,16 @@ fun handleDeployFee(_sender: address, value: coins) {
         }
         i += 1;
     }
-    assert (value >= perMinterProvideValue * unresolvedCount) throw Errors.InsufficientBalance;
+    // The caller pays for everything this call spends: the provide values
+    // AND the registry scan above. The provides go out in mode 0, so their
+    // forwarding fees come out of their own value, not the balance.
+    val scanFee = calculateGasFee(
+        BASECHAIN,
+        DEPLOY_BASE_GAS_UNITS + DEPLOY_GAS_UNITS_PER_ASSET * n,
+    );
+    assert (
+        value >= perMinterProvideValue * unresolvedCount + scanFee
+    ) throw Errors.InsufficientBalance;
     var k: int = 0;
     while (k < unresolvedCount) {
         val dest = toNotify.mustGet(k as uint16);
@@ -810,20 +943,33 @@ fun handleServiceFee(sender: address, value: coins, side: int) {
     st.save();
 }
 
-// Manual execution trigger. Deliberately NO balance check: canAutoExecute
-// checks the balance, manual execute does not; `available` inside
-// executeSwap is simply clamped to 0 if the real balance isn't enough).
-fun handleExecuteSwap(sender: address, _value: coins) {
+// Manual execution, for a deal that is fully funded but did not execute on its
+// last deposit (for example, the completing deposit could record itself but not
+// pay for the check). Either owner may call it. What it carries counts as the
+// caller's own payment, so one message can pay a shortfall and execute.
+// The checks run from the most specific to the most general, so the error
+// says what is missing and, for 433/434, which side has to pay.
+fun handleExecuteSwap(sender: address, value: coins) {
     var st = Storage.load();
-    assert (sender == st.owner1) throw Errors.NotOwner1;
+    assert (sender == st.owner1 || sender == st.owner2) throw Errors.NotOwners;
     assert (st.phase == PHASE_ACTIVE) throw Errors.AlreadyFinalized;
-    val g = st.grams.load();
+    var g = st.grams.load();
+    if (sender == st.owner1) {
+        g.gram1Received += value;
+    } else {
+        g.gram2Received += value;
+    }
+    st.grams = g.toCell();
     assert (g.gram1Received >= g.gram1Amount) throw Errors.NotEnoughTon1;
     assert (g.gram2Received >= g.gram2Amount) throw Errors.NotEnoughTon2;
     assert (g.serviceFee1 >= SERVICE_FEE) throw Errors.ServiceFee1;
     assert (g.serviceFee2 >= SERVICE_FEE) throw Errors.ServiceFee2;
     assert (st.received1Count >= st.required1Count) throw Errors.NftsNotReceived;
     assert (st.received2Count >= st.required2Count) throw Errors.NftsNotReceived;
+    assert (st.sideFunded(g, 1)) throw Errors.SideUnderfunded1;
+    assert (st.sideFunded(g, 2)) throw Errors.SideUnderfunded2;
+    assert (st.balanceCovers(g, 0)) throw Errors.InsufficientBalance;
+    setGasLimit(st.executionGasUnits(g));
     st.executeSwap(0);
     st.save();
 }
@@ -839,7 +985,7 @@ fun handleContinueDistribution(sender: address) {
     if (d.mode == DIST_IDLE) {
         return;
     }
-    st.runDistributionBatch();
+    st.runDistributionBatch(0);
     st.save();
 }
 
@@ -852,83 +998,160 @@ fun handleKick(sender: address, _value: coins) {
     assert (sender == st.owner1 || sender == st.owner2) throw Errors.NotOwners;
     val d = st.dist.load();
     assert (d.mode != DIST_IDLE) throw Errors.AlreadyFinalized;
-    st.runDistributionBatch();
+    st.runDistributionBatch(0);
     st.save();
 }
 
-// The only handler with an explicit balance check (throw 430). That check is
-// what makes cancel all-or-nothing: it must either fully succeed — every
-// refund and NFT return sent — or fully roll back, never leaving the deal
-// CANCELLED without the balance to cover what it owes.
-fun handleCancelSwap(sender: address, _value: coins) {
+// Gas units the cancel's initiating transaction may use: every send it may
+// queue and the walk over the registry, which visits every entry whether it
+// was received or not. On the batch path that transaction runs only the first
+// batch, which stops at BATCH_GAS_SOFT_CAP, so the units are capped at what
+// one batch transaction may use. On the fast path they are capped at
+// TX_GAS_LIMIT_CEILING: setGasLimit grants no more than that, and the reserve
+// (quoteCancel prices these same units) must not charge the sides for gas the
+// transaction can never use. A fully deposited 100-entry cancel models
+// 1,201,000 units and measured 354,689 (a 100-NFT registry, every item
+// deposited, tests/nosup/cancel_settlement.test.tolk), about 2.8x below the
+// ceiling.
+fun cancelTxGasUnits(registrySize: int, sendCount: int): int {
+    val units = EXEC_GAS_UNITS_BASE + EXEC_GAS_UNITS_PER_SEND * sendCount +
+        SKIP_GAS_UNITS_PER_ENTRY * registrySize;
+    if (registrySize > FAST_PATH_MAX_ASSETS && units > CONTINUE_GAS_UNITS) {
+        return CONTINUE_GAS_UNITS;
+    }
+    if (units > TX_GAS_LIMIT_CEILING) {
+        return TX_GAS_LIMIT_CEILING;
+    }
+    return units;
+}
+
+// What a cancel needs, computed from the balance BEFORE the canceller's
+// attachment. `baseCost` (C) is what cancel spends or keeps regardless of who
+// gets what: asset returns, gas for this and every later transaction, the
+// dust margin and the storage floor.
+// raw1/raw2 are the formula refunds, unclamped: a negative one is that side's
+// shortfall. `required` keeps the side without a shortfall whole — comparing
+// the balance with C plus the shortfalls alone would let the other side's
+// money on the balance "cover" them. `gasUnits` is the gas limit of the
+// initiating transaction; `baseCost` prices exactly these units.
+struct CancelQuote {
+    baseCost: coins
+    required: coins
+    raw1: coins
+    raw2: coins
+    gasUnits: int
+}
+
+fun Storage.quoteCancel(self, g: GramState, balanceBefore: coins): CancelQuote {
+    val o1 = self.ownTransferCost(1);
+    val o2 = self.ownTransferCost(2);
+    val receivedTotal = (self.received1Count as int) + (self.received2Count as int);
+    val registrySize = self.assetsCount as int;
+    // feeWallet sweep + refund1 + refund2 + the surplus refund to the canceller
+    val sendCount = receivedTotal + 4;
+    val gasUnits = cancelTxGasUnits(registrySize, sendCount);
+    var baseCost = o1 + o2 + calculateGasFee(BASECHAIN, gasUnits) + DUST;
+    if (registrySize > FAST_PATH_MAX_ASSETS) {
+        // The chain's later transactions: the returns the first batch did not
+        // send, and a base per batch (gated on the REGISTRY SIZE: the chain's
+        // length is set by how far the cursor walks). The first batch sends
+        // the continue message in this transaction, together with the
+        // refunds: its value must be on the balance. It comes back on
+        // arrival, so it is present, not spent.
+        baseCost += calculateGasFee(BASECHAIN, EXEC_GAS_UNITS_PER_SEND * receivedTotal) +
+            batchChainReserve(registrySize, receivedTotal) +
+            continueMsgValue();
+    }
+    // A year of storage stays on the cancelled escrow.
+    baseCost += self.storageFloor();
+    val r0 = balanceBefore - baseCost;
+    val raw1 = (r0 + (paidBy(g, 1) - o1) - (paidBy(g, 2) - o2)) / 2;
+    val raw2 = r0 - raw1;
+    var required = baseCost;
+    if (raw1 > 0) {
+        required += raw1;
+    }
+    if (raw2 > 0) {
+        required += raw2;
+    }
+    return CancelQuote { baseCost, required, raw1, raw2, gasUnits };
+}
+
+// Cancel settles by the same formula as execute: each side gets back what it
+// paid less the return of its own assets and half of the shared costs. The
+// balance check (throw 430) makes cancel all-or-nothing: it either fully
+// succeeds — every asset return and every refund that reaches sendableMinimum
+// sent — or fully rolls back. The
+// canceller covers any side's shortfall (its own first), and anything it
+// attached above that comes back to it.
+fun handleCancelSwap(sender: address, value: coins) {
     var st = Storage.load();
     assert (sender == st.owner1 || sender == st.owner2) throw Errors.NotOwners;
     assert (st.phase == PHASE_ACTIVE || st.phase == PHASE_SETUP) throw Errors.AlreadyFinalized;
 
     val g = st.grams.load();
-    // Return cost: NFT at 0.03, jettons at 0.05 — the received sub-type
-    // counters are maintained incrementally (receivedJettonsN), no map scan
-    // needed.
-    val jet1On = st.receivedJettons1 as int;
-    val jet2On = st.receivedJettons2 as int;
-    val nfts1On = (st.received1Count as int) - jet1On;
-    val nfts2On = (st.received2Count as int) - jet2On;
-    val return1Cost = NFT_TRANSFER_VALUE * nfts1On + JETTON_TRANSFER_VALUE * jet1On;
-    val return2Cost = NFT_TRANSFER_VALUE * nfts2On + JETTON_TRANSFER_VALUE * jet2On;
+    val balance = contract.getOriginalBalance();
+    val q = st.quoteCancel(g, balance - value);
+    assert (balance >= q.required) throw Errors.InsufficientBalance;
+    // From here on this transaction's gas comes out of the reserve inside
+    // `required` (it prices exactly these units), not out of the attached
+    // value.
+    setGasLimit(q.gasUnits);
 
-    var refund1 = g.gram1Received + g.serviceFee1;
-    val reserve1Rem = g.gram1DepositReserve - return1Cost;
-    if (reserve1Rem > 0) {
-        refund1 += reserve1Rem;
+    // The attachment covers the shortfalls — the canceller's own first, then
+    // the other side's; what is left above them comes back to the canceller.
+    var surplus = balance - q.required;
+    if (surplus > value) {
+        surplus = value;
     }
-    var refund2 = g.gram2Received + g.serviceFee2;
-    val reserve2Rem = g.gram2DepositReserve - return2Cost;
-    if (reserve2Rem > 0) {
-        refund2 += reserve2Rem;
+    val credit = value - surplus;
+    val short1: coins = q.raw1 < 0 ? -q.raw1 : 0;
+    val short2: coins = q.raw2 < 0 ? -q.raw2 : 0;
+    val cancellerIsOne = sender == st.owner1;
+    val ownShort = cancellerIsOne ? short1 : short2;
+    val otherShort = cancellerIsOne ? short2 : short1;
+    val toOwn = credit < ownShort ? credit : ownShort;
+    var toOther = credit - toOwn;
+    if (toOther > otherShort) {
+        toOther = otherShort;
     }
-
-    // Balance check: the sum of all mandatory outgoing amounts (asset
-    // returns + the distribution gas reserve + both refunds) must not
-    // exceed the contract's real balance at transaction entry.
-    val receivedTotal = (st.received1Count as int) + (st.received2Count as int);
-    val registrySize = st.assetsCount as int;
-    val sendCount = receivedTotal + 3;
-    // The batch surcharge is INSIDE the asserted `required`: otherwise
-    // a long cancel chain would come up short on gas for its trailing
-    // batches. It is gated on the REGISTRY SIZE, not on sendCount and not on
-    // receivedTotal: the chain's length is set by how far the cursor has to
-    // walk (every registry entry is visited, received or not), while the +3
-    // (feeWallet+refund1+refund2) are not part of the chain at all — refunds
-    // go out in the initiating tx and the DIST_CANCEL finale only sweeps.
-    // Using sendCount instead would, right at receivedTotal==100 (the
-    // production cap 50×50), make sendCount==103 add the surcharge to a
-    // SINGLE-transaction fast-path cancel, inflating `required` and risking
-    // rejection of a valid cancel.
-    // For a registry of <=100, batchExtraReserve is 0.
-    val fwdReserve = execGasReserve(sendCount) + batchExtraReserve(registrySize);
-    var required = return1Cost + return2Cost + fwdReserve;
-    if (refund1 > 0) {
-        required += refund1;
-    }
-    if (refund2 > 0) {
-        required += refund2;
-    }
-    assert (contract.getOriginalBalance() >= required) throw Errors.InsufficientBalance;
+    val credit1 = cancellerIsOne ? toOwn : toOther;
+    val credit2 = cancellerIsOne ? toOther : toOwn;
+    val (refund1, refund2) = splitRefunds(
+        balance - q.baseCost - surplus,
+        paidBy(g, 1) + credit1 - st.ownTransferCost(1),
+        paidBy(g, 2) + credit2 - st.ownTransferCost(2),
+    );
 
     st.phase = PHASE_CANCELLED;
 
-    // GRAM refunds go out IMMEDIATELY, in the initiating transaction (both
-    // branches): their amount is accounted for in `required`, and the batch
-    // finale (DIST_CANCEL) only sends the sweep.
-    if (refund1 > 0) {
+    // Surplus and refunds go out IMMEDIATELY, in the initiating transaction
+    // (both paths): the batch finale only splits what the chain did not spend.
+    // An amount below sendableMinimum is not sent: below one forward fee it
+    // would fail the action phase and abort the cancel, and anyone can move
+    // the refunds there with an unattributed inflow. It stays on the balance
+    // and goes to the fee wallet with the sweep. The bound is the forwarding
+    // cost, not DUST, so the pre-check gas allowance cancelCost adds still
+    // comes back to the canceller.
+    val minRefund = sendableMinimum();
+    var queued: coins = 0;
+    if (surplus >= minRefund) {
+        createMessage({ bounce: BounceMode.NoBounce, value: surplus, dest: sender }).send(
+            SEND_MODE_REGULAR,
+        );
+        queued += surplus;
+    }
+    if (refund1 >= minRefund) {
         createMessage({ bounce: BounceMode.NoBounce, value: refund1, dest: st.owner1 }).send(
             SEND_MODE_REGULAR,
         );
+        queued += refund1;
     }
-    if (refund2 > 0) {
+    if (refund2 >= minRefund) {
         createMessage({ bounce: BounceMode.NoBounce, value: refund2, dest: st.owner2 }).send(
             SEND_MODE_REGULAR,
         );
+        queued += refund2;
     }
 
     // The gate is the REGISTRY SIZE, not the number of received assets: the
@@ -938,6 +1161,7 @@ fun handleCancelSwap(sender: address, _value: coins) {
     // to cancel — must still be cancellable within the 1,000,000-gas ceiling,
     // so the gate cannot key off how many deposits actually arrived.
     // Storage.executeSwap gates on assetsCount for the same reason.
+    val registrySize = st.assetsCount as int;
     if (registrySize <= FAST_PATH_MAX_ASSETS) {
         // Fast path (<=100): single-transaction return + sweep.
         //
@@ -980,13 +1204,15 @@ fun handleCancelSwap(sender: address, _value: coins) {
             r = st.assets.iterateNext(r);
         }
 
+        // Keep a year of storage on the escrow; the sweep carries everything above it.
+        reserveGramsOnBalance(st.storageFloor(), RESERVE_MODE_AT_MOST);
         // The remainder goes to fee_wallet, sent LAST.
-        // SAFETY: fast-path cancel — GRAM refunds were already sent above
-        // (see the refund1/refund2 blocks before this loop) and every
-        // received asset has just been returned to its original
-        // depositor. This is the function's last statement before
-        // st.save(). The leftover gas reserve goes to feeWallet rather than
-        // being split back to depositors — deliberate, by design.
+        // SAFETY: fast-path cancel — the surplus and both refunds that reach
+        // sendableMinimum were already sent above and every received asset
+        // has just been returned to its original depositor. This is the
+        // function's last statement before st.save(). The floor is reserved
+        // first, so what the sweep carries is the unused part of the gas
+        // reserve, the dust margin and any amount below sendableMinimum.
         createMessage({ bounce: BounceMode.NoBounce, value: 0, dest: st.feeWallet }).send(
             SEND_MODE_CARRY_ALL_BALANCE,
         );
@@ -994,15 +1220,18 @@ fun handleCancelSwap(sender: address, _value: coins) {
         return;
     }
 
-    // Batch return (>100): GRAM refunds already sent above; assets go out
-    // in batches through the engine; the sweep happens in the final batch
-    // (finalizeDistribution DIST_CANCEL, mode 128). We do NOT send a sweep in
-    // the initiating transaction.
+    // Batch return (>100): the surplus and refunds already sent above; assets
+    // go out in batches through the engine; the sweep happens in the final
+    // batch (finalizeDistribution DIST_CANCEL, mode 128). We do NOT send a
+    // sweep in the initiating transaction. The batch is told what this
+    // transaction has already queued, in case it finalizes right here; an
+    // amount held back above is not queued: it stays on the balance for the
+    // finale, which splits it with the unspent reserve or sweeps it.
     st.dist = DistState {
         mode: DIST_CANCEL,
         cursor: 0,
     }.toCell();
-    st.runDistributionBatch();
+    st.runDistributionBatch(queued);
     st.save();
 }
 
@@ -1010,8 +1239,8 @@ fun handleCancelSwap(sender: address, _value: coins) {
 // The rightful recipient pulls an asset whose push delivery did not arrive.
 // Recipient: the opposite side while executing or after DONE; the depositor
 // after CANCELLED. Funded entirely by the attached value (mode 64), so it
-// works on an emptied balance and lets the caller attach more gas than the
-// original transfer carried.
+// does not draw on the storage floor a settled escrow keeps, and lets the
+// caller attach more gas than the original transfer carried.
 //
 // NFT: allowed for any received NFT the distribution has already sent
 // (dist idle, or index behind the cursor), without a bounce mark — a bounce
@@ -1019,10 +1248,50 @@ fun handleCancelSwap(sender: address, _value: coins) {
 // safe because an NFT item only honours a transfer from its current owner: if
 // the NFT was already delivered, the transfer is rejected and nothing moves.
 //
+// A registry NFT slot that was never recorded — the item reached the escrow
+// with a forward too small to notify it — is claimable only after cancel, by
+// its side owner. The current-owner check protects this case: if the item
+// never actually arrived, the escrow does not own it and the transfer is
+// refused, so the claim moves nothing beyond its own attached value. The
+// registry does not forbid listing the same NFT address on both sides, so
+// this claim also refuses if that address appears in any slot on the OTHER
+// side — the escrow may be holding the item for that other side instead
+// (Storage.hasCrossSideDuplicate).
+//
 // Jetton: only while marked claimable. The escrow holds one wallet per
 // minter, possibly with tokens of another asset of the same minter, so an
 // unconfirmed resend could move tokens that are not this asset's. A bounce of
 // the escrow wallet's transfer proves the tokens are still there.
+
+// Whether NFT address `addr` (the item registered at `idx`) also occupies a
+// registry slot on the OTHER side — recorded or not. The registry has no
+// rule against listing one NFT address twice across sides, so an unrecorded
+// slot's own side ownership does not prove the escrow is holding THIS item
+// for THIS slot: it may instead be holding a same-address item deposited (or
+// stuck) on the other side. A duplicate on the SAME side is harmless — same
+// owner either way. Paid entirely by the claimer's attached value, like the
+// rest of claim_asset, at about 1,350 gas per entry: a 100-entry registry's
+// claim uses 134,738 gas (about 0.009 TON today). No attachment buys more than
+// the 1,000,000-gas transaction limit, so above about 740 entries (measured:
+// 740 entries 994,213 gas, 760 out of gas) this claim always runs out of gas
+// and an unrecorded item there cannot be pulled out; running out of gas simply
+// bounces the value back.
+fun Storage.hasCrossSideDuplicate(self, idx: uint16, addr: address): bool {
+    val mySide = self.assets.mustGet(idx).ownerSide;
+    val n = self.assetsCount as int;
+    var i: int = 0;
+    while (i < n) {
+        if (i != (idx as int)) {
+            val a = self.assets.mustGet(i as uint16);
+            if (a.kind == 0 && a.addr == addr && a.ownerSide != mySide) {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    return false;
+}
+
 fun handleClaimAsset(sender: address, value: coins, msg: ClaimAsset) {
     var st = Storage.load();
     assert (
@@ -1033,10 +1302,20 @@ fun handleClaimAsset(sender: address, value: coins, msg: ClaimAsset) {
     var a = st.assets.mustGet(idx);
     if (a.kind == 1) {
         assert (a.claimable) throw Errors.NotClaimable;
-    } else {
-        assert (a.received) throw Errors.NotClaimable;
+    } else if (a.received) {
         val d = st.dist.load();
         assert (d.mode == DIST_IDLE || (idx as int) < (d.cursor as int)) throw Errors.NotClaimable;
+    } else {
+        // An NFT the escrow never recorded: sent to the deal with a forward too
+        // small to notify it. Only after cancel, and only by its side owner
+        // (the recipient in CANCELLED). The item refuses the transfer if the
+        // escrow does not own it, so a claim for an item that never arrived
+        // moves nothing. If the same address is also listed on the OTHER
+        // side, the escrow may be holding the item for that side instead
+        // (a recorded deposit stuck there, or another too-small forward) —
+        // refuse rather than hand it to the wrong side.
+        assert (st.phase == PHASE_CANCELLED) throw Errors.NotClaimable;
+        assert (!st.hasCrossSideDuplicate(idx, a.addr)) throw Errors.NotClaimable;
     }
     val depositor = a.ownerSide == 1 ? st.owner1 : st.owner2;
     val counterparty = a.ownerSide == 1 ? st.owner2 : st.owner1;
@@ -1320,8 +1599,35 @@ fun handleJettonNotification(sender: address, value: coins, msg: JettonTransferN
     }
     st.grams = g.toCell();
 
+    // Record the deposit before attempting execution: the jetton has already
+    // moved and its notification does not bounce, so if execution ran out of
+    // gas here the record must survive. COMMIT keeps it even if an exception
+    // follows; the deal then waits for execute_swap. The overpayment refund
+    // queued above is committed with it.
+    st.save();
+    commitContractDataAndActions();
     st.tryAutoExecute(committedOut);
     st.save();
+}
+
+// A registry slot that can take this NFT from this sender: an unreceived NFT
+// slot for the same item, and — when checkSender — one whose side owner is the
+// sender. The sender is only checked when the notification carries enough to
+// send a rejected item back (RETURN_TRANSFER_VALUE): below that a rejected
+// item would stay unrecorded with the escrow, and after cancel it would
+// normally go to the same side owner anyway — except when the same address
+// is also listed on the OTHER side, in which case claim_asset's cross-side
+// check (Storage.hasCrossSideDuplicate) refuses either side's unrecorded
+// slot. So rejecting the deposit here would only break the deal.
+fun Storage.nftSlotAccepts(self, a: Asset, nft: address, sender: address, checkSender: bool): bool {
+    if (a.kind != 0 || a.received || a.addr != nft) {
+        return false;
+    }
+    if (!checkSender) {
+        return true;
+    }
+    val sideOwner = a.ownerSide == 1 ? self.owner1 : self.owner2;
+    return sideOwner == sender;
 }
 
 fun handleNftReceived(sender: address, value: coins, msg: OwnershipAssigned) {
@@ -1351,30 +1657,33 @@ fun handleNftReceived(sender: address, value: coins, msg: OwnershipAssigned) {
     // deposit's forward_payload (the same either-0 + uint16 format as the
     // jetton hint; the mock/real item passes the
     // payload straight through in OwnershipAssigned). THE INDEX IS ONLY A
-    // HINT, NOT A SOURCE OF TRUTH: after the lookup, a mandatory
-    // CHECK verifies assets[hint].addr == nft (the NFT item's address = the
-    // actual sender). There is no way to forge the index to sneak in the
-    // wrong/a foreign NFT — the address check catches the substitution, and
-    // the path falls through to the linear fallback below, then to
+    // HINT, NOT A SOURCE OF TRUTH: it is verified by the same predicate as
+    // the linear fallback below — item address, unreceived, and (when the
+    // value can pay a return) the sender — so there is no way to forge the
+    // index to sneak in the wrong/a foreign NFT, or to hint at another
+    // side's slot. A wrong hint falls through to the fallback, then to
     // auto-return. The hint only replaces an O(N) scan with an O(1) lookup,
     // removing the deposit ceiling (~850 -> no ceiling).
+    val checkSender = value >= RETURN_TRANSFER_VALUE;
     val hintIdx = parseAssetIndexHint(msg.forwardPayload);
     if (hintIdx >= 0 && hintIdx < (st.assetsCount as int)) {
         val a = st.assets.mustGet(hintIdx as uint16);
-        if (a.kind == 0 && !a.received && a.addr == nft) {
+        if (st.nftSlotAccepts(a, nft, msg.previousOwner, checkSender)) {
             foundIdx = hintIdx;
             asset = a;
         }
     }
 
-    // Fallback: no hint / malformed / address mismatch -> linear search
+    // Fallback: no hint, a malformed one, or one that does not accept this
+    // item from this sender -> linear search with the same predicate, so a
+    // wrong hint falls through to the right slot instead of bouncing the item.
     // The asset is captured directly during the scan, so there is no repeat
     // dictionary lookup (`mustGet`) after the loop.
     if (foundIdx < 0) {
         var r = st.assets.findFirst();
         while (r.isFound && foundIdx < 0) {
             val a = r.loadValue();
-            if (a.kind == 0 && a.addr == nft) {
+            if (st.nftSlotAccepts(a, nft, msg.previousOwner, checkSender)) {
                 foundIdx = r.getKey();
                 asset = a;
             }
@@ -1383,13 +1692,8 @@ fun handleNftReceived(sender: address, value: coins, msg: OwnershipAssigned) {
     }
 
     if (foundIdx < 0) {
-        // not from the deal's registry (a foreign NFT) -> auto-return
-        returnForeignNft(nft, msg.previousOwner, value);
-        return;
-    }
-
-    if (asset.received) {
-        // duplicate (the NFT came back to the escrow again) -> return
+        // No free registry slot for this item and sender: a foreign NFT, a
+        // duplicate of a received item, or a third party's deposit -> auto-return.
         returnForeignNft(nft, msg.previousOwner, value);
         return;
     }
@@ -1407,6 +1711,12 @@ fun handleNftReceived(sender: address, value: coins, msg: OwnershipAssigned) {
     }
     st.grams = g.toCell();
 
+    // Record the deposit before attempting execution: the item's ownership has
+    // already moved and its notification does not bounce, so if execution ran
+    // out of gas here the record must survive. COMMIT keeps it even if an
+    // exception follows; the deal then waits for execute_swap.
+    st.save();
+    commitContractDataAndActions();
     st.tryAutoExecute(0);
     st.save();
 }
@@ -1471,6 +1781,81 @@ get fun swapId(): int {
 get fun canAutoExecuteNow(): bool {
     val st = lazy Storage.load();
     return st.canAutoExecute(0);
+}
+
+// How much each side still has to pay before the deal can execute (0 when
+// funded). Paying this amount must pass the leg check (gramNReceived against
+// gramNAmount), the per-side check (sideFunded) and the balance check
+// (balanceCovers, throw 430). A payment made through execute_swap or a
+// deposit raises paidBy and gramNReceived by the same amount, so per side the
+// first two need a_N = max(0, sideShare - paidBy, gramNAmount - gramNReceived).
+// The per-side counters credit deposits gross, while every deposit's
+// processing gas comes off the shared balance, so paying a_1 + a_2 can still
+// leave the balance below minBalanceForSwap. That deficit,
+// max(0, minBalanceForSwap - (balance + a_1 + a_2)), is split equally on top
+// (side 2 takes the odd nanoton) while the deal is in SETUP or ACTIVE.
+// The balance check reads the balance before the paying message's own gas, so
+// the payment that completes the deal needs nothing extra. When both sides pay
+// figures read at the same time, the first payment's processing gas
+// (824,601 nanoton for a deposit_ton1/2 at today's gas price, measured by
+// tests/nosup/execute_swap.test.tolk) comes off the balance before the second
+// arrives, so each side adds 0.001 TON to its figure (one side's 0.001 alone
+// covers that gas with a 21% margin).
+// After one side's payment has landed its figure is only its half of the
+// remaining deficit, and the other side can pay both figures together.
+// Deposits still to come add their attached value. Walks the registry.
+get fun executionShortfall(): (int, int) {
+    val st = lazy Storage.load();
+    val g = st.grams.load();
+    var s1 = st.sideShare(g, 1, st.registryTransferCost(1)) - paidBy(g, 1);
+    val leg1 = g.gram1Amount - g.gram1Received;
+    if (leg1 > s1) {
+        s1 = leg1;
+    }
+    if (s1 < 0) {
+        s1 = 0;
+    }
+    var s2 = st.sideShare(g, 2, st.registryTransferCost(2)) - paidBy(g, 2);
+    val leg2 = g.gram2Amount - g.gram2Received;
+    if (leg2 > s2) {
+        s2 = leg2;
+    }
+    if (s2 < 0) {
+        s2 = 0;
+    }
+    if (st.phase != PHASE_ACTIVE && st.phase != PHASE_SETUP) {
+        // A settled or executing deal has no balance check left to pass.
+        return (s1, s2);
+    }
+    val deficit = st.minBalanceForSwap(g) - (contract.getOriginalBalance() + s1 + s2);
+    if (deficit > 0) {
+        val half1 = deficit / 2;
+        s1 += half1;
+        s2 += deficit - half1;
+    }
+    return (s1, s2);
+}
+
+// What cancel_swap needs now: (required, value to attach). The value covers
+// both sides' shortfalls plus the gas to reach the balance check; anything
+// attached above that comes back to the canceller.
+get fun cancelCost(): (int, int) {
+    val st = lazy Storage.load();
+    val g = st.grams.load();
+    val balance = contract.getOriginalBalance();
+    val q = st.quoteCancel(g, balance);
+    var shortfall = q.required - balance;
+    if (shortfall < 0) {
+        shortfall = 0;
+    }
+    return (q.required, shortfall + calculateGasFee(BASECHAIN, CANCEL_PRECHECK_GAS_UNITS));
+}
+
+// One year of storage fees for this deal's state; a settled escrow keeps this
+// much on its balance.
+get fun storageFloor(): int {
+    val st = lazy Storage.load();
+    return st.storageFloor();
 }
 
 get fun receivedCounts(): (int, int) {

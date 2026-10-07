@@ -1,10 +1,10 @@
 # SwapEscrowNosup — Security Review
 
-**Date:** 2026-09-18
-**Subject:** `contracts/escrow_nosup_beta_v1.tolk`, `contracts/nosup/storage.tolk`, `contracts/nosup/messages.tolk`, reviewed as a diff against `contracts/escrow_beta_v1.tolk` (code hash `41F7882FE4445147DAC4907FF6AEB60C32C4F7A5F43BFE5357433C18D41418D3`, covered by `docs/SECURITY-REVIEW-2026-09-11.md`)
-**Code hash reviewed:** `42883CBEF30F0E8E703A87046E3592B71F8C505CBEA05B92534FC699C3CE874C`
+**Date:** 2026-09-29
+**Subject:** `contracts/escrow_nosup_beta_v1.tolk`, `contracts/nosup/storage.tolk`, `contracts/nosup/accounting.tolk`, `contracts/nosup/messages.tolk`, reviewed as a diff against `contracts/escrow_beta_v1.tolk` (code hash `41F7882FE4445147DAC4907FF6AEB60C32C4F7A5F43BFE5357433C18D41418D3`, covered by `docs/SECURITY-REVIEW-2026-09-11.md`)
+**Code hash reviewed:** `A76E7AE03669554882BA6371CCC9A70060E00E583AC9721F001575E25F6B99C0`
 **Toolchain:** Acton 1.2.0
-**Method:** manual review of the contract's source and of its diff against `escrow_beta_v1.tolk`, plus the project's mutation-testing results: 273 critical-level mutants against `SwapEscrowNosup`, 222 killed, 50 survived (all outside the four security-critical functions — `onBouncedMessage`, `handleClaimAsset`, `runDistributionBatch`, `handleKick` — except two mutants inside them that were confirmed equivalent by manual guard-removal testing), and 1 mutant the mutation harness could not execute because it induces a genuine non-terminating self-message chain rather than a scoreable pass/fail. Symbolic execution (TSA) has not been run against this contract — see [Tooling](#tooling) below.
+**Method:** manual review of the contract's source and of its diff against `escrow_beta_v1.tolk`, plus the project's mutation-testing results: 273 critical-level mutants against `SwapEscrowNosup`, 222 killed, 50 survived (all outside the four security-critical functions — `onBouncedMessage`, `handleClaimAsset`, `runDistributionBatch`, `handleKick` — except two mutants inside them that were confirmed equivalent by manual guard-removal testing), and 1 mutant the mutation harness could not execute because it induces a genuine non-terminating self-message chain rather than a scoreable pass/fail. These mutation-testing counts were not obtained at the code hash stated above as reviewed — the mutation run predates later changes to this code — and mutation testing has not been re-run to confirm they still hold at this hash; no claim is made here that they do. Symbolic execution (TSA) has not been run against this contract — see [Tooling](#tooling) below.
 
 Line numbers refer to the source at the hash above, as published in this
 repository, and were checked against the current file as of this review's
@@ -35,10 +35,10 @@ privileged role could do.
 |---|-------|------|
 | 1 | **Trust** | No privileged role exists anywhere in this contract's bytecode |
 | 2 | **Trust** | `feeWallet` is an ordinary payee, never a custodian |
-| 3 | Design | A bounced delivery marks the asset claimable instead of stalling the deal; only the asset's rightful recipient can pull it, and only to their own address |
+| 3 | Design | A bounced delivery marks the asset claimable instead of stalling the deal; an NFT the escrow never recorded can be claimed after cancel; only the asset's rightful recipient can pull an asset, and only to their own address |
 | 4 | Design | The batch-completion rule was simplified along with removing retry/park state |
-| 5 | Design | `execute_swap` remains `owner1`-only, carried over unchanged |
-| 6 | Documented risk | Seven residual ways an asset can remain unrecoverable, none fixable without reintroducing a privileged role |
+| 5 | Design | `execute_swap` is open to both owners and checks funding through an ordered set of codes |
+| 6 | Documented risk | Nine residual ways an asset can remain unrecoverable, none fixable without reintroducing a privileged role |
 
 ---
 
@@ -54,7 +54,7 @@ through `requireSupervisor` (:1180). None of the six exist in
 that describe the *absence* of the role, never a field, a handler or a check.
 There is no `Storage.sup` field, no `SupervisorState`, no `requireSupervisor`,
 and no `DIST_COLLECT`/`DIST_RETURN` distribution modes — `contracts/nosup/storage.tolk`
-defines only `DIST_IDLE`, `DIST_EXECUTE` and `DIST_CANCEL` (lines 143-145).
+defines only `DIST_IDLE`, `DIST_EXECUTE` and `DIST_CANCEL` (lines 196-198).
 
 The message-level surface confirms the same thing from the other direction:
 the four supervisor-only opcodes from `escrow_beta_v1` —
@@ -62,19 +62,19 @@ the four supervisor-only opcodes from `escrow_beta_v1` —
 `RescueJetton` (`0x6d5f0003`) and `ForceDeliver` (`0x6d5f0005`) — are not part
 of `EscrowNosupBinaryMessage` (`contracts/nosup/messages.tolk:17-23`), so a
 message carrying any of them falls through to `onInternalMessage`'s `else`
-branch and throws `Errors.UnknownOp` (`escrow_nosup_beta_v1.tolk:90-92`); the
+branch and throws `Errors.UnknownOp` (`escrow_nosup_beta_v1.tolk:91-93`); the
 corresponding text commands (`emergency_collect_assets`,
 `emergency_return_assets`, `emergency_withdraw_ton`) are likewise absent from
-`handleTextCommand` (`escrow_nosup_beta_v1.tolk:97-132`) and fall through to
-the unknown-command `throw 130` (line 131). Both are pinned by
+`handleTextCommand` (`escrow_nosup_beta_v1.tolk:98-133`) and fall through to
+the unknown-command `throw 130` (line 132). Both are pinned by
 `tests/nosup/smoke.test.tolk`'s `test nosup former supervisor text commands
 are unknown` and `test nosup former supervisor binary opcodes are unknown`,
 and independently by `ts-tests/nosup.test.ts`'s assertion that
 `Errors['Errors.NotSupervisor']` is absent from the generated error enum
 (error code 404 does not exist in this contract at all).
 
-`handleKick` (`escrow_nosup_beta_v1.tolk:850-857`) is gated on
-`sender == st.owner1 || sender == st.owner2` only (line 852) — the
+`handleKick` (`escrow_nosup_beta_v1.tolk:969-976`) is gated on
+`sender == st.owner1 || sender == st.owner2` only (line 971) — the
 supervisor branch present in the corresponding check in `escrow_beta_v1.tolk`
 has no counterpart here.
 
@@ -85,14 +85,35 @@ of them read-only value transfers funded by money that was already committed
 to leave the contract, never a pull of a deal asset:
 
 - **The combined service fee**, sent once per completed deal
-  (`finalizeDistribution:403`, `executeSwapSingleTx:572`).
-- **The dust sweep**, which drains whatever is left on the balance after every
-  other payout in a finalizing transaction has already been sent
-  (`finalizeDistribution:422,433`, `executeSwapSingleTx:597`,
-  `handleCancelSwap:990`) — always the function's last statement, after every
-  refund, GRAM exchange and asset transfer.
+  (`finalizeDistribution:476`, `executeSwapSingleTx:674`).
+- **The dust sweep**, which drains whatever is left on the balance above the
+  storage floor (see the README's [After settlement](../README.md#after-settlement))
+  after every other payout in a finalizing transaction has already been sent
+  (`finalizeDistribution:504,541`, `executeSwapSingleTx:706`,
+  `handleCancelSwap:1216`) — always the function's last statement, after every
+  refund, GRAM exchange and asset transfer. A refund below the dust minimum
+  (`refundMinimum()`: `DUST`, or two plain forward fees if those ever exceed
+  it) is not sent and goes to `feeWallet` with this sweep — on execute, for
+  each side's refund (`executeSwapSingleTx:682-692`,
+  `finalizeDistribution:483-493`), and in the cancel finale, for the leftover
+  split (`finalizeDistribution:526`). Above one forward fee such a refund
+  would arrive mostly eaten by forwarding; below it the refund cannot pay its
+  own forwarding in mode 0, fails the action phase with result code 37 and
+  aborts the whole transaction — on a completing NFT or Jetton deposit that also discards the
+  deposit's record, since COMMIT does not survive an action-phase failure
+  (pinned by `tests/nosup/execute_refund_min.test.tolk`). The amount is below
+  `DUST` per side. The cancel's initiating transaction uses a lower bound for
+  each side's refund and the canceller's surplus (`handleCancelSwap:1136-1155`):
+  two plain forward fees (`sendableMinimum()`, about 0.00013 TON), enough for
+  the message to pay its own forwarding, so the pre-check gas allowance that
+  `cancelCost()` adds still comes back to the canceller. Anyone can move the
+  refunds with an unattributed inflow (an `Excesses` is credited without
+  checks and split equally), so without this rule a stranger could keep a
+  deal from being cancelled (pinned by `tests/nosup/cancel_refund_min.test.tolk`).
+  On the batch path an amount held back is not counted as queued, so it stays
+  in the finale's split or sweep.
 - **A stranger's plain TON transfer**, forwarded rather than absorbed
-  (`handlePlainTransfer:641`) — funded by the incoming message's own value
+  (`handlePlainTransfer:724-729`) — funded by the incoming message's own value
   under `SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE`, not the contract's
   balance, so it cannot be used to drain anything.
 
@@ -101,59 +122,82 @@ It cannot be substituted at runtime (it is set once, at deploy, alongside
 `owner1`/`owner2`), and nothing in this contract treats it as anything other
 than a destination address.
 
-## 3. [Design] Bounce-then-claim pull delivery
+## 3. [Design] Bounce-then-claim pull delivery, plus a claim path for an unrecorded NFT
 
 `escrow_beta_v1.tolk`'s recovery for a failed push delivery is the
 supervisor's `rescue_nft`/`rescue_jetton`/`force_deliver`. This contract
-replaces all three with two small, unprivileged handlers.
+replaces all three with two small, unprivileged handlers, plus a third claim
+path for an NFT the escrow never recorded at all.
 
-**`onBouncedMessage`** (`escrow_nosup_beta_v1.tolk:1421-1452`) is deliberately
+**`onBouncedMessage`** (`escrow_nosup_beta_v1.tolk:1677-1708`) is deliberately
 minimal, since it is paid for entirely by the bounced value: a short-body
-guard (`remainingBitsCount() < 96`, lines 1423-1425), an opcode filter for
-`NftTransfer`/`JettonTransfer` only (lines 1427-1429), a sentinel check that
-rejects non-asset queryIds (`>= QUERY_ID_NON_ASSET`, lines 1431-1433) followed
-by an independent range check against `assetsCount` (lines 1435-1437) — the
+guard (`remainingBitsCount() < 96`, lines 1679-1681), an opcode filter for
+`NftTransfer`/`JettonTransfer` only (lines 1683-1685), a sentinel check that
+rejects non-asset queryIds (`>= QUERY_ID_NON_ASSET`, lines 1687-1689) followed
+by an independent range check against `assetsCount` (lines 1691-1693) — the
 sentinel `0xFFFE` is always ≥ any real `assetsCount`, so the two checks
 overlap by construction, which is why a mutation disabling only the sentinel
 check is an equivalent mutant (see the mutation-testing note below) — a phase
 gate restricting bounces to the three phases in which asset transfers can
-actually be outstanding (lines 1438-1440), and a `received` guard (lines
-1443-1445). Once past all of that, it saturates `a.bounces` at 15 (lines
-1446-1448, a `uint4` field) and sets `a.claimable = true` (line 1449) before a
-single `save()` (line 1451). No loop, no distribution logic, no asset leaves
+actually be outstanding (lines 1694-1696), and a `received` guard (lines
+1699-1701). Once past all of that, it saturates `a.bounces` at 15 (lines
+1702-1703, a `uint4` field) and sets `a.claimable = true` (line 1705) before a
+single `save()` (line 1707). No loop, no distribution logic, no asset leaves
 the contract from this handler.
 
-**`handleClaimAsset`** (lines 1026-1073) is the only way a marked asset
-leaves the contract outside the normal push path. Its checks run in a fixed
-order: the deal must be in a phase where asset transfers are meaningful
-(`EXECUTING`/`DONE`/`CANCELLED`, lines 1028-1030, else `AlreadyFinalized`);
-the index must be in range (line 1032, else `BadAssetIndex`); the
-kind-specific claimability gate (lines 1034-1040) — a Jetton must be marked
-`claimable` (line 1035), an NFT must simply be `received` and already behind
-the distribution cursor or the distribution already idle (lines 1037-1039,
-otherwise `NotClaimable`); the caller must be exactly the deal's rightful
-recipient for that asset and phase (lines 1041-1044, computed independently of
-anything the caller supplies, else `NotRecipient`); and the caller must have
-attached enough value to fund the transfer (lines 1045-1046, else
-`InsufficientBalance`). Only after every check passes does it clear the
-`claimable` flag if it was set (lines 1048-1052) and send the asset, funded
-entirely by the caller's own attached value under
-`SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE` (lines 1053-1072) — the
-contract's own balance is never spent. The recipient computation
-(lines 1041-1043) reads only `st.owner1`/`st.owner2`/`a.ownerSide`/`st.phase`,
-so a caller cannot influence who counts as the recipient, and a depositor of
-an asset can never be its own recipient once the swap has executed (`phase ==
+**`handleClaimAsset`** (`escrow_nosup_beta_v1.tolk:1241-1298`) is the only way
+a marked asset leaves the contract outside the normal push path. Its checks
+run in the same order on every call: the deal must be in a phase where asset
+transfers are meaningful (`EXECUTING`/`DONE`/`CANCELLED`, lines 1243-1245,
+else `AlreadyFinalized`); the index must be in range (line 1247, else
+`BadAssetIndex`); then a kind- and state-specific claimability gate (lines
+1249-1264) — a Jetton must be marked `claimable` (lines 1249-1250); an NFT
+that was received follows the delivery cursor instead and needs no bounce
+mark at all (lines 1251-1253, `NotClaimable` otherwise), since an NFT item
+only ever honours a transfer from its current owner and a second attempt at
+one already delivered is simply rejected by the item itself; an NFT that was
+**never received** — the registry slot exists, but the item either never
+arrived or arrived with a forward too small to be recorded — can only be
+claimed once the deal is `CANCELLED` (line 1263), and only if the same NFT
+address does not also occupy a slot on the *other* side (line 1264,
+`Storage.hasCrossSideDuplicate`, `escrow_nosup_beta_v1.tolk:1225-1239`): the
+registry does not forbid listing one address twice, so without this check the
+claim could hand the item to the wrong side's owner if the escrow is actually
+holding it for the other side. The current-owner check inside the NFT item
+itself is what keeps this branch safe even when the item never arrived at
+all, since the transfer is then simply refused and nothing moves beyond the
+claimer's own attached value. The duplicate scan costs about 1,350 gas per
+registry entry and no attachment buys more than the 1,000,000-gas
+transaction limit, so on a registry above about 740 entries this branch
+always runs out of gas and an unrecorded item there cannot be claimed (see
+the README's [Deposits](../README.md#deposits) section). After the
+claimability gate, the caller must be
+exactly the deal's rightful recipient for that asset and phase (lines
+1266-1269, computed independently of anything the caller supplies, else
+`NotRecipient`), and must have attached enough value to fund the transfer
+(lines 1270-1271, else `InsufficientBalance`). Only after every check passes
+does it clear the `claimable` flag if it was set (lines 1273-1277) and send
+the asset, funded entirely by the caller's own attached value under
+`SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE` (lines 1278-1297) — the
+contract's own balance is never spent. The recipient computation (lines
+1266-1268) reads only `st.owner1`/`st.owner2`/`a.ownerSide`/`st.phase`, so a
+caller cannot influence who counts as the recipient, and a depositor of an
+asset can never be its own recipient once the swap has executed (`phase ==
 CANCELLED` is the only phase in which the depositor is the recipient, and a
 completed deal cannot return to `CANCELLED`).
 
-The asymmetry between NFTs and Jettons in the second check (line 1035 vs.
-1037-1039) is intentional, not an oversight: an NFT item accepts a transfer
-only from its current owner, so re-sending an NFT the escrow no longer holds
-is harmlessly rejected by the NFT contract, while the escrow's Jetton wallet
-for a minter can hold tokens belonging to more than one asset of the deal, so
-re-sending without proof of an earlier bounce could move the wrong tokens.
-This is documented for integrators in the source comment directly above
-`handleClaimAsset` (lines 1009-1025) and in the README.
+The asymmetry between NFTs and Jettons in the received-asset case (lines
+1249-1250 vs. 1251-1253) is intentional, not an oversight: an NFT item
+accepts a transfer only from its current owner, so re-sending an NFT the
+escrow no longer holds is rejected by the NFT contract itself — though not
+for free, since the claimer's own attached value funds that rejected attempt
+and the bounce it produces returns to the escrow's balance, not to the
+claimer (see the README's claim section). The escrow's Jetton wallet for a
+minter, by contrast, can hold tokens belonging to more than one asset of the
+deal, so re-sending without proof of an earlier bounce could move the wrong
+tokens. This is documented for integrators in the source comments directly
+above `handleClaimAsset` (lines 1188-1214) and `Storage.hasCrossSideDuplicate`
+(lines 1216-1224), and in the README.
 
 ## 4. [Design] Batch-completion rule simplified along with retry/park removal
 
@@ -162,72 +206,97 @@ This is documented for integrators in the source comment directly above
 three outcomes at the end — finalize, continue, or "park" (stop advancing and
 wait for an explicit `kick`) — specifically to give the supervisor's
 `force_deliver` something to act on. `Storage.runDistributionBatch` in this
-contract (`escrow_nosup_beta_v1.tolk:322-355`) has none of that: `DistState`
-carries only `mode` and `cursor` (`contracts/nosup/storage.tolk:147-150`), the
-loop is a single linear walk over `received` assets (lines 329-340), and the
+contract (`escrow_nosup_beta_v1.tolk:378-411`) has none of that: `DistState`
+carries only `mode` and `cursor` (`contracts/nosup/storage.tolk:200-203`), the
+loop is a single linear walk over `received` assets (lines 385-396), and the
 completion rule is two-way, not three-way: the cursor has cleared the
 registry **and** this transaction sent nothing → finalize in a separate
-transaction (lines 342-344, via `finalizeDistribution`); otherwise → send one
-more `ContinueDistribution` self-message and keep going (lines 345-353). A
+transaction (lines 398-400, via `finalizeDistribution`); otherwise → send one
+more `ContinueDistribution` self-message and keep going (lines 401-409). A
 bounce can no longer cause a batch to "park" — it is handled entirely by
 `onBouncedMessage` outside the distribution loop, so `runDistributionBatch`
 itself does not need to know that a send failed.
 
-`handleContinueDistribution` (lines 835-844) still exists to drive the
+`handleContinueDistribution` (lines 954-963) still exists to drive the
 self-trigger chain forward and is still restricted to
-`sender == contract.getAddress()` (line 836); `handleKick` (lines 850-857)
+`sender == contract.getAddress()` (line 955); `handleKick` (lines 969-976)
 still exists to resume a chain whose `ContinueDistribution` bounced, gated to
-`owner1`/`owner2` only (line 852, see item 1 above) — but since there is no
+`owner1`/`owner2` only (line 971, see item 1 above) — but since there is no
 `retry` state left to redeliver from, a `kick` here can only ever resume the
 existing cursor, never re-send an asset the contract has already attempted.
 
 Mutation testing exercised both of these two-way branches directly: one
 mutant on `runDistributionBatch`'s own internal `d.mode == DIST_IDLE` guard
-(line 324) survives in both directions, but it is unreachable dead code from
-every real call site — all four callers (`Storage.executeSwap:263`,
-`handleContinueDistribution:842`, `handleKick:855`, `handleCancelSwap:1005`)
+(line 380) survives in both directions, but it is unreachable dead code from
+every real call site — all four callers (`Storage.executeSwap:316`,
+`handleContinueDistribution:961`, `handleKick:974`, `handleCancelSwap:1184`)
 already guarantee `dist.mode != DIST_IDLE` before calling it, either by an
 assert/early-return immediately above the call or by freshly setting the mode
 right before it — so this is a confirmed equivalent mutant, not a gap.
 
-## 5. [Design] `execute_swap` remains `owner1`-only
+## 5. [Design] `execute_swap` is open to both owners and checks funding through an ordered set of codes
 
-`handleExecuteSwap` (lines 816-829) asserts `sender == st.owner1` (line 818),
-unchanged from `escrow_beta_v1.tolk`. `owner2` cannot trigger manual
-execution even with every precondition met; auto-execution
-(`Storage.tryAutoExecute`, lines 604-608, invoked from every deposit handler)
-covers the normal path, so this only matters when auto-execution has not
-fired and `owner1` is unavailable. This asymmetry was carried over
-deliberately rather than revisited, since resolving it is unrelated to
-removing the supervisor role.
+`handleExecuteSwap` (`escrow_nosup_beta_v1.tolk:952-975`) accepts either
+owner (`sender == st.owner1 || sender == st.owner2`, line 954) — unlike
+`escrow_beta_v1.tolk`, which restricts manual execution to `owner1`. Whatever
+value the caller attaches is credited to that owner's own TON leg before any
+check runs (lines 957-961), so a single message can both cover a shortfall
+and trigger execution. The checks then run from the most specific to the
+most general, each with its own error code: each side's TON leg
+(`NotEnoughTon1`/`NotEnoughTon2`, 420/421, lines 963-964), each side's service
+fee (`ServiceFee1`/`ServiceFee2`, 422/423, lines 965-966), that both sides
+have received every required asset (`NftsNotReceived`, 424, lines 967-968),
+each side's overall funding share via `Storage.sideFunded`
+(`SideUnderfunded1`/`SideUnderfunded2`, 433/434, lines 969-970), and finally
+that the balance itself covers everything execution is about to send via
+`Storage.balanceCovers` (`InsufficientBalance`, 430, line 971). Ordering the
+checks this way means a caller who is short on exactly one thing is told
+which one, rather than getting a single generic failure regardless of cause.
+`Storage.sideFunded`/`Storage.sideShare` and the shared-cost split
+(`Storage.sharedCosts`) live in `escrow_nosup_beta_v1.tolk` itself (lines
+251-282); `contracts/nosup/accounting.tolk` is the pure module with no
+storage access of its own that they build on — it holds `paidBy`,
+`transferCost`, `splitRefunds`, `Storage.ownTransferCost` and
+`Storage.registryTransferCost` — and is exercised directly by
+`tests/nosup/accounting.test.tolk`.
+
+The get-method `executionShortfall()` (`escrow_nosup_beta_v1.tolk:1807-1837`)
+exposes, per side, the amount that still has to be paid for the leg check,
+the overall funding check and the balance check to pass (the balance deficit
+split equally on top of the per-side amounts), so a client can quote a
+shortfall before sending anything; `cancelCost()` (lines 1842-1852) and
+`storageFloor()` (lines 1856-1859) do the same for the cancel path and the
+post-settlement reserve respectively (see the README's
+[Funding before execution](../README.md#funding-before-execution),
+[Cancel](../README.md#cancel) and [After settlement](../README.md#after-settlement)
+sections).
 
 ## 6. [Documented risk] Residual unrecoverable-asset cases
 
 Removing the supervisor removes the recovery mechanism for the cases its
 rescue handlers existed to cover, and the pull-delivery mechanism in item 3
-above closes the ones a rightful recipient can fund themselves out of their
-own attached value. What is left is seven narrow cases where no contract-side
+above closes every one a rightful recipient can fund themselves out of their
+own attached value. What is left is nine narrow cases where no contract-side
 mechanism can help without reintroducing exactly the kind of privileged role
-this contract is built to avoid. They are listed and explained for
-integrators in the README's
-["Risks this variant does not remove"](../README.md#risks-this-variant-does-not-remove)
-section: an underfunded Jetton overpayment refund, a foreign asset sent
-without enough gas for a return, a Jetton whose second internal hop fails
-inside the Jetton contract itself, a recipient whose own wallet rejects the
-incoming transfer, `owner1`-only manual execution (item 5 above), a
-same-deal NFT deposited late without enough gas (recoverable via
-`claim_asset`, unlike the fully-foreign case), and a Jetton bounce that never
-reaches the escrow. None of the seven were found to have a cheaper fix than
-the one already chosen (reject at deploy time, size the attached gas
-correctly, or accept the residual risk) without adding a role capable of
-moving other people's assets.
+this contract is built to avoid — from an underfunded Jetton overpayment
+refund and a foreign asset sent without enough gas for a return, to a large
+rise in the network's gas price outliving a deployed deal and a batch deal
+left one self-message short of finalization. They are listed and explained
+for integrators in the README's
+[Risks this variant does not remove](../README.md#risks-this-variant-does-not-remove)
+section, together with the settlement, funding and cancel mechanics
+described in the sections immediately above it. None of the nine have a
+cheaper remedy than the one already chosen for each (reject at deploy time,
+size the attached gas correctly, keep a storage-floor reserve, or accept the
+residual risk) without adding a role capable of moving other people's assets.
 
-The README list has since grown to ten: two further cases surfaced during the
-audit pass described below — a rise in the network's gas price outliving a
-deployed deal, and a batch deal left one self-message short of finalization
-when both owners walk away. Neither is a defect in the code; both are
-consequences of pricing a deal at deploy time and of having nobody privileged
-to finish it.
+The same README section also records one risk that strands no asset but
+blocks a deal: a TON leg smaller than one forward fee (about 0.00007 TON)
+cannot be delivered — its plain message cannot pay its own forwarding, the
+action phase fails with result code 37, and every execution attempt aborts,
+leaving cancel as the only exit (checked in the emulator with a 1,000-nanoton
+leg). The contract does not reject such a leg at deploy; whoever builds the
+deal must keep every TON leg at least `DUST`.
 
 ---
 
@@ -238,40 +307,56 @@ four independent angles, each starting from the source rather than from the
 work that produced it: theft and authorization; permanent loss, lockup and
 accounting; gas, griefing and limits; and drift against `escrow_beta_v1`.
 
-No exploitable defect was found. Two candidate findings were rejected, and
-both rest on the same kind of mistake, so they are recorded here rather than
-dropped:
+No exploitable defect was found. One theory raised during the pass does not
+hold up, and it rests on a distinction worth stating explicitly, so it is
+recorded here rather than dropped:
 
-- **"A contract can forge a bounce and mark a Jetton claimable."** It cannot.
-  An outbound internal message is normalized during the action phase:
-  `bounced` is forced to `false` and `src` is replaced with the sending
-  account's address (https://docs.ton.org/foundations/actions/send, "message
-  normalization"). Only a genuine failed delivery produces a message the
-  recipient sees as bounced, which is why `onBouncedMessage` needs no sender
-  check. The emulator can build such a message directly — that is how the
-  guard tests reach the handler — but no contract can.
-- **"An outsider can drain the balance with cheap messages that trigger the
-  registry scans in `handleDeployFee` / `handleTakeWalletAddress`."** It
-  cannot. For an internal message, the compute-phase gas limit is the lesser
-  of the network maximum and the gas the incoming value can buy; a contract
-  spends its own balance on compute only after calling `accept_message`, which
-  neither escrow ever does. An underfunded message runs out of gas and changes
-  nothing.
+- **"An outsider can drain the balance with cheap, underfunded messages that
+  trigger the registry scans in `handleDeployFee` / `handleTakeWalletAddress`."**
+  It cannot. For an internal message, the compute-phase gas limit starts as
+  the lesser of the network maximum and the gas the incoming value can buy; a
+  contract spends its own balance on compute only after raising that limit —
+  via `accept_message` or, as this contract does, `setGasLimit`
+  (`escrow_nosup_beta_v1.tolk:695`, `:945`, `:1062`). The theory above still
+  does not hold up, but not because the contract never raises the limit: it
+  does, through `setGasLimit`, but only after the funding gate has already
+  passed —
+  auto-execution's `canAutoExecute` checks, `execute_swap`'s own checks
+  (420-434, 430), or cancel's balance check (430 via `quoteCancel`) — so an
+  *underfunded* message that never gets past those checks simply runs out of
+  gas on the value it carried and changes nothing.
 
-What the pass did change is documentation. `required1Count`/`required2Count`
-are now named explicitly in the README's deal-validity section, because a
-registry can be well-formed while those counts release one side from
-depositing anything; the claim section now states that the value check is
-against the arriving value, so a claim attached with exactly the minimum
-under-funds the transfer it pays for; and the residual-risk list gained the
-two cases named above.
+  That reasoning does not, by itself, cover a **fully funded** `deploy_fee`
+  call, which does forward real value through the contract:
+  `handleDeployFee` (`escrow_nosup_beta_v1.tolk:770-844`) sends one TEP-89
+  `ProvideWalletAddress` per unresolved minter, and a caller who pays exactly
+  for those sends — without also paying for the registry scan that finds
+  them — could repeat the call, fully funded every time, and have the
+  escrow's own balance quietly cover the scan on each repetition: what such a
+  call spends beyond its own attached value is the escrow's own gas walking
+  the registry, not a forwarding fee handed to anyone. `handleDeployFee` prices
+  that scan directly: `scanFee` (lines 821-824) is
+  `calculateGasFee(BASECHAIN, DEPLOY_BASE_GAS_UNITS + DEPLOY_GAS_UNITS_PER_ASSET
+  × assetsCount)`, and the call asserts
+  `value >= perMinterProvideValue × unresolvedCount + scanFee` (lines
+  825-827) before sending anything, so the caller who triggers the scan is
+  the one who pays for it, on every call, not only on ones that happen to be
+  cheap for the escrow.
 
-Also noted and deliberately left alone: the pro-rata refund weights a side's
-whole GRAM contribution rather than only its excess, which can skew leftover
-dust by a fraction of the deal's gas — inherited unchanged from
-`escrow_beta_v1`; and `QUERY_ID_NON_ASSET` (`0xFFFE`) sits inside the
-registry's theoretical `uint16` index space, unreachable because the compute
-ceiling caps a deployable deal two orders of magnitude below it.
+Two things this pass surfaced live in the documentation rather than above.
+`required1Count`/`required2Count` are named explicitly in the
+README's deal-validity section, because a registry can be well-formed while
+those counts release one side from depositing anything. The claim section
+states that the value check is against the arriving value, so a claim
+attached with exactly the minimum under-funds the transfer it pays for. The
+residual-risk list also covers two cases beyond the ones the implementation
+itself surfaced: a rise in the network's gas price outliving a deployed deal,
+and a batch deal left one self-message short of finalization when both owners
+walk away.
+
+Also noted and deliberately left alone: `QUERY_ID_NON_ASSET` (`0xFFFE`) sits
+inside the registry's theoretical `uint16` index space, unreachable because
+the compute ceiling caps a deployable deal two orders of magnitude below it.
 
 ---
 
@@ -281,27 +366,27 @@ ceiling caps a deployable deal two orders of magnitude below it.
   `onBouncedMessage` are the only entry points, matching `escrow_beta_v1`;
   no `onExternalMessage` handler was introduced.
 - **`ClaimAsset`'s recipient cannot be forged.** The recipient
-  (`escrow_nosup_beta_v1.tolk:1041-1043`) is computed from storage the caller
+  (`escrow_nosup_beta_v1.tolk:1266-1268`) is computed from storage the caller
   does not control (`owner1`, `owner2`, `a.ownerSide`, `st.phase`), never from
   a field of the incoming message.
 - **Double-claim of a Jetton is prevented before the send.** `handleClaimAsset`
-  clears `a.claimable` and calls `st.save()` (lines 1048-1052) *before*
-  sending the transfer (lines 1053-1072), so a second `claim_asset` for the
+  clears `a.claimable` and calls `st.save()` (lines 1273-1277) *before*
+  sending the transfer (lines 1278-1297), so a second `claim_asset` for the
   same index arriving before the first is confirmed sees `claimable == false`
   and is rejected with `NotClaimable`, not a double transfer.
-- **Double-claim of an already-delivered NFT is harmless, not free, and its
-  gas cost is pinned.** Re-sending an NFT the escrow no longer owns is
-  rejected by the NFT item itself; mutation testing found and closed a gap
-  where a forced-true claimable-write branch was observably more expensive
-  than the real one (7388 gas unmutated vs. 10059 gas mutated on the same
-  call), and `tests/nosup/claim.test.tolk` now asserts a gas ceiling on that
-  path so a regression that starts writing storage unconditionally would fail
-  the test, not just cost more gas silently.
+- **A repeated claim of an already-delivered NFT does not move the asset
+  twice, but is not free.** Re-sending an NFT the escrow no longer owns is
+  rejected by the NFT item itself, so the asset never moves a second time —
+  but the claimer's own attached value funded that rejected attempt, and the
+  bounce it produces is not returned to them. `tests/nosup/claim.test.tolk`
+  asserts a gas ceiling on this call (the real path costs 7388 gas; a
+  mutant that writes storage unconditionally on this branch costs 10059), so
+  a regression that starts writing storage unconditionally here fails the
+  test, not just costs more gas silently.
 - **The bounce-diagnostic counter cannot overflow.** `a.bounces` is a
-  `uint4` and the increment is gated on `a.bounces < 15`
-  (line 1446); mutation testing found this guard was never exercised past
-  saturation by any pre-existing test and a dedicated 20-bounce test was
-  added (`tests/nosup/bounce.test.tolk`).
+  `uint4` and the increment is gated on `a.bounces < 15` (line 1702);
+  `tests/nosup/bounce.test.tolk` includes a dedicated 20-bounce test that
+  exercises this guard past saturation.
 - **Bounce handling cannot be spoofed.** As in `escrow_beta_v1`, an outbound
   internal message is normalized during the action phase: `bounced` is forced
   to `false` and `src` is replaced with the sending account's address
@@ -313,18 +398,32 @@ ceiling caps a deployable deal two orders of magnitude below it.
   This is why the handler needs no sender check. The
   `QUERY_ID_NON_ASSET` sentinel keeps a non-asset bounce (e.g. a Jetton
   overpayment refund) from ever being misread as a bounce of asset index 0.
-- **Atomicity is unchanged from `escrow_beta_v1`.** Every finalizing handler
-  sets `phase` before distributing, and an action-phase failure reverts the
-  compute phase's storage write, so a distribution goes out whole or not at
-  all.
+- **A transaction's own action phase is atomic; the batch chain as a whole is
+  not all-or-nothing.** Every finalizing handler sets `phase` before
+  distributing, and an action-phase failure reverts that transaction's
+  storage write, so any single transaction's own sends go out in full or not
+  at all — unchanged from `escrow_beta_v1`. A large deal's distribution,
+  though, spans several transactions (`Storage.runDistributionBatch`,
+  `escrow_nosup_beta_v1.tolk:378-411`, chained through `continueMsgValue` and
+  `batchChainReserve`, lines 146-169), and the chain as a whole can stop
+  partway: a self-triggered `ContinueDistribution` can bounce, and its bounce
+  is deliberately ignored (item 4), leaving the chain waiting for `kick`; a
+  single asset send inside an otherwise-successful batch can itself bounce,
+  in which case the batch keeps going and the failed asset is marked
+  claimable rather than rolling the whole batch back (`onBouncedMessage`).
+  This is a liveness cost of pricing the chain at a set gas budget per
+  batch, not a correctness gap: `claim_asset` (item 3) exists precisely so a
+  bounced send never blocks the rest of the deal, and `kick` exists precisely
+  so a stalled chain never needs anything more privileged than either owner
+  to resume.
 - **The hot loop is untouched.** `executeSwapSingleTx`
-  (`escrow_nosup_beta_v1.tolk:442-600`) was copied from `escrow_beta_v1`
+  (`escrow_nosup_beta_v1.tolk:528-682`) was copied from `escrow_beta_v1`
   without a single changed instruction in its per-asset send loops (lines
-  519-568), preserving the gas calibration `tests/nosup/gas_probe.test.tolk`
+  599-648), preserving the gas calibration `tests/nosup/gas_probe.test.tolk`
   pins.
 - **Unwind paths still scale with the registry.** `handleCancelSwap` and
   `Storage.executeSwap` both gate the fast-path/batch-path decision on
-  `assetsCount` (lines 941 and 252 respectively), matching `escrow_beta_v1`'s
+  `assetsCount` (lines 1117 and 305 respectively), matching `escrow_beta_v1`'s
   reasoning for not exhausting the 1,000,000-gas ceiling on a large,
   lightly-deposited deal.
 
@@ -344,7 +443,7 @@ no symbolic-analysis results — positive or negative — are claimed here.
 
 ```bash
 acton build                # verify both code hashes (see README's "Verifying the build")
-acton test                 # full suite: 364 passed, 3 skipped
+acton test                 # full suite: 446 passed, 3 skipped
 npm install && npm test    # TypeScript wrappers against Tolk-side fixtures, both contracts
 ```
 

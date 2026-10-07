@@ -110,12 +110,23 @@ get fun `test batched cancel returns 120 assets in batches with final sweep`() {
     // 60 + 60 = 120 received > 100 → batched cancel. Asymmetric config:
     //   side 1: gram1=1 (deposit 1.01), service_fee1=0.1, fwd1=0.05/NFT;
     //   side 2: no gram, no fee, fwd2=0.10/NFT.
-    // Refund windows (from the handleCancelSwap formula, NFT_TRANSFER_VALUE=0.03):
-    //   return1Cost = 0.03*60 = 1.8;  reserve1 = 60*0.05 = 3.0 → rem1 = 1.2
-    //   refund1 = gram1Received(1.01) + serviceFee1(0.1) + rem1(1.2) = 2.31
-    //   return2Cost = 0.03*60 = 1.8;  reserve2 = 60*0.10 = 6.0 → rem2 = 4.2
-    //   refund2 = 0 + 0 + rem2(4.2) = 4.2
-    // The windows do not overlap (2.29..2.32 vs 4.18..4.21): a side
+    // Each side's net contribution (paid minus the return of its own assets,
+    // NFT_TRANSFER_VALUE=0.03):
+    //   N1 = 1.01 + 0.1 + 60*0.05 - 60*0.03 = 2.31
+    //   N2 = 60*0.10 - 60*0.03 = 4.2
+    // refund_i = N_i - S/2 + U/2, where S is everything shared: the gas of
+    // the 120 deposits (unhinted, so each walks the registry; credited gross
+    // to the counters but paid from the balance) and the cancel's own gas
+    // reserve and the storage floor (0.0286 for 120 entries); U is the deploy
+    // remainder. The sides differ by exactly N2 - N1 = 1.89. Every deposit's
+    // own gas includes committing its record (a save plus COMMIT) before its
+    // auto-execute check, so S accrues on all 120 deposits, not only a
+    // completing one.
+    // Measured: refund1 = 1.548106878, refund2 = 3.438106879, i.e.
+    // N_i - refund_i = 0.761893 on both sides (S and U split evenly, so this
+    // is side-independent): the shared costs net of U come to about 1.5238
+    // total, 0.7619 per side.
+    // The windows do not overlap (1.530..1.560 vs 3.420..3.450): a side
     // transposition (refunds going to the wrong depositor) would guarantee
     // this test fails.
     val f = setupBigDeal(
@@ -129,10 +140,18 @@ get fun `test batched cancel returns 120 assets in batches with final sweep`() {
         true,
     );
 
-    // Cancel from owner2 (either side may cancel). Attached with a margin
-    // over the balance check's required = 1.8+1.8+fwdReserve+2.31+4.2 ≈ 10.6.
+    // Cancel from owner2 (either side may cancel). Neither side has a
+    // shortfall, so the whole 3 TON attachment is surplus and comes back to
+    // owner2 (less the forwarding fee of its message).
     val res = f.escrow.sendText(f.o2.address, "cancel_swap", ton("3"));
     expect(res).toHaveAllSuccessfulTxs();
+    expect(res).toHaveTx({
+        from: f.escrow.address,
+        to: f.o2.address,
+        value: fun(v: coins): bool {
+            return v > ton("2.99") && v <= ton("3");
+        },
+    });
 
     // CANCELLED immediately (in the initiating transaction).
     expect(f.escrow.phase()).toEqual(PHASE_CANCELLED);
@@ -156,21 +175,22 @@ get fun `test batched cancel returns 120 assets in batches with final sweep`() {
         from: f.escrow.address,
         to: f.o1.address,
         value: fun(v: coins): bool {
-            return v >= ton("2.29") && v <= ton("2.32");
+            return v >= ton("1.530") && v <= ton("1.560");
         },
     });
     expect(res).toHaveTx({
         from: f.escrow.address,
         to: f.o2.address,
         value: fun(v: coins): bool {
-            return v >= ton("4.18") && v <= ton("4.21");
+            return v >= ton("3.420") && v <= ton("3.450");
         },
     });
 
     // The remainder is swept to feeWallet in the final batch (DIST_CANCEL
-    // finalizeDistribution, mode 128): the escrow is emptied to zero.
+    // finalizeDistribution, mode 128): the escrow keeps exactly the storage
+    // floor.
     expect(res).toHaveTx({ from: f.escrow.address, to: f.fw.address });
-    expect(testing.getAccountBalance(f.escrow.address)).toEqual(0);
+    expect(testing.getAccountBalance(f.escrow.address)).toEqual(f.escrow.storageFloor());
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -239,9 +259,10 @@ get fun `test kick in CANCELLED completes stalled returns`() {
     expect(readMockOwner(f.nfts2.mustGet(0))).toEqual(f.o2.address); // idx 2
     expect(readMockOwner(f.nfts2.mustGet(1))).toEqual(f.o2.address); // idx 3
 
-    // The sweep went to feeWallet (DIST_CANCEL finalization), the escrow is emptied.
+    // The sweep went to feeWallet (DIST_CANCEL finalization); the escrow keeps
+    // exactly the storage floor.
     expect(res).toHaveTx({ from: f.escrow.address, to: f.fw.address });
-    expect(testing.getAccountBalance(f.escrow.address)).toEqual(0);
+    expect(testing.getAccountBalance(f.escrow.address)).toEqual(f.escrow.storageFloor());
 }
 
 // ─────────────────────────────────────────────────────────────────────────

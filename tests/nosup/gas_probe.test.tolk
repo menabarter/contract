@@ -302,6 +302,11 @@ fun runJettonSwap(k1: int, k2: int): bool {
     val escrow = deployEscrow(o1, cfg);
     expect(escrow.sendText(o1.address, "service_fee_owner1", SERVICE_FEE)).toHaveAllSuccessfulTxs();
     expect(escrow.sendText(o2.address, "service_fee_owner2", SERVICE_FEE)).toHaveAllSuccessfulTxs();
+    // A side with no assets pays its half of the shared costs as TON.
+    if (k2 == 0) {
+        val (_s1, s2) = escrow.executionShortfall();
+        expect(escrow.sendText(o2.address, "deposit_ton2", s2)).toHaveAllSuccessfulTxs();
+    }
     // IMPORTANT (single-minter, multi-entry deal): under fallback matching, all
     // of a side's entries are equivalent — the hint pins down the specific index
     i = 0;
@@ -488,13 +493,27 @@ get fun `test probe mixed 80nft+20jetton per side batched`() {
 }
 
 get fun `test gas probe: 850x1 (851 total) full cycle completes`() {
-    runFullSwap(850, 1, 0, 0, ton("0.20"));
+    runFullSwap(
+        850,
+        1,
+        0,
+        0,
+        ton("0.20"),
+        true,
+    );
 }
 
 // Full cycles (deploy + deposits + auto-execution) at 1000 assets — reach DONE
 // via the batching engine.
 get fun `test probe 1000x1 nft batched swap completes`() {
-    val escrow = runFullSwap(1000, 1, 0, 0, ton("0.20"));
+    val escrow = runFullSwap(
+        1000,
+        1,
+        0,
+        0,
+        ton("0.20"),
+        true,
+    );
     val progress = escrow.distributionProgress();
     expect(progress.0).toEqual(DIST_IDLE);
     expect(progress.1).toEqual(1001);
@@ -646,103 +665,6 @@ get fun `test distribution engine batches 1001 assets via kick (isolated from de
 // of GASCONSUMED, not because of the send-count limit.
 // ─────────────────────────────────────────────────────────────────────────
 
-struct SparseCancelFixture {
-    escrow: EscrowFixture
-    o1: Treasury
-    o2: Treasury
-    fw: Treasury
-    tailNfts: map<uint16, address>
-}
-
-fun deploySparseCancelMidState(tag: string, skipCount: int, tailCount: int): SparseCancelFixture {
-    val o1 = testing.treasury(tagged(tag, "-o1"));
-    val o2 = testing.treasury(tagged(tag, "-o2"));
-    val fw = testing.treasury(tagged(tag, "-fw"));
-    val dummy = testing.treasury(tagged(tag, "-dummy"));
-
-    // Skip zone: "empty" side-1 entries, all pointing at ONE dummy address
-    // (never dereferenced — received=false, sendAsset is not called).
-    var nfts1: map<uint16, address> = [];
-    var i = 0;
-    while (i < skipCount) {
-        nfts1.set(i as uint16, dummy.address);
-        i += 1;
-    }
-    // Tail: real side-2 NFTs — the only ones that will actually be sent.
-    var tailNfts: map<uint16, address> = [];
-    var j = 0;
-    while (j < tailCount) {
-        tailNfts.set(j as uint16, deployNft(o1, 80000 + j));
-        j += 1;
-    }
-    val cfg = EscrowConfig {
-        owner1: o1.address,
-        owner2: o2.address,
-        feeWallet: fw.address,
-        nfts1,
-        nfts1Count: skipCount,
-        nfts2: tailNfts,
-        nfts2Count: tailCount,
-        gram1Amount: 0,
-        gram2Amount: 0,
-        jettons: [],
-        jettonsCount: 0,
-    };
-    var st = buildInitialStorage(cfg);
-    // buildInitialStorage already sets received=false for ALL assets — exactly
-    // what the skip zone needs. The tail (the last tailCount entries — nfts2)
-    // is flipped to received=true: as if side 2 actually deposited its
-    // assets while side 1 (skipCount dummy entries) did not (the deal is
-    // cancelled while side 1 still hasn't finished the registry — a typical
-    // "broken chain" scenario).
-    val total = st.assetsCount as int;
-    var k = skipCount;
-    while (k < total) {
-        var a = st.assets.mustGet(k as uint16);
-        a.received = true;
-        st.assets.set(k as uint16, a);
-        k += 1;
-    }
-    st.received2Count = tailCount as uint16;
-    st.phase = PHASE_CANCELLED;
-    st.dist = DistState {
-        mode: DIST_CANCEL,
-        cursor: 0,
-    }.toCell();
-
-    val escrow = SwapEscrowNosup.fromStorage(st);
-
-    // Transfer ownership of the tail NFTs to the escrow (a test opcode,
-    // SetNftOwner, as in deployEscrowMidDistribution) — the skip zone uses a
-    // single dummy address and is never dereferenced by the contract, so
-    // real mock contracts for the 700 entries are NOT needed (saves wall
-    // time).
-    var r = tailNfts.findFirst();
-    while (r.isFound) {
-        val m = createMessage({
-            bounce: false,
-            value: ton("0.05"),
-            dest: r.loadValue(),
-            body: SetNftOwner {
-                queryId: 0,
-                newOwner: escrow.address,
-            },
-        });
-        expect(net.send(o1.address, m)).toHaveAllSuccessfulTxs();
-        r = tailNfts.iterateNext(r);
-    }
-
-    val deployMessage = createMessage({
-        bounce: false,
-        value: ton("5"),
-        dest: { stateInit: escrow.stateInit! },
-    });
-    expect(net.send(o1.address, deployMessage)).toHaveSuccessfulDeploy({ to: escrow.address });
-    expect(escrow.phase()).toEqual(PHASE_CANCELLED);
-
-    return SparseCancelFixture { escrow, o1, o2, fw, tailNfts };
-}
-
 get fun `test GASCONSUMED soft-cap forces multi-batch cancel over long unreceived skip zone`() {
     // 2000 unreceived entries are skipped (skip-only, ~a few hundred gas each
     // — a dict lookup WITHOUT sending) + 50 real sends in the tail. WITHOUT
@@ -784,8 +706,8 @@ get fun `test GASCONSUMED soft-cap forces multi-batch cancel over long unreceive
     // gas-driven interruption.
     expect(readMockOwner(f.tailNfts.mustGet(0))).toEqual(f.o2.address);
     expect(readMockOwner(f.tailNfts.mustGet(49))).toEqual(f.o2.address);
-    // The final sweep (DIST_CANCEL) empties the escrow to zero.
-    expect(testing.getAccountBalance(f.escrow.address)).toEqual(0);
+    // The final sweep (DIST_CANCEL) leaves exactly the storage floor.
+    expect(testing.getAccountBalance(f.escrow.address)).toEqual(f.escrow.storageFloor());
 }
 
 // ─────────────────────────────────────────────────────────────────────────

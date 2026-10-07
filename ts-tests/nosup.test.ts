@@ -187,6 +187,8 @@ console.log('\n3. Error enum (no supervisor):');
 const errs = (SwapEscrowNosup as unknown as { Errors: Record<string, number> }).Errors;
 checkEq("Errors['Errors.NotRecipient'] == 405", 405, errs['Errors.NotRecipient']);
 checkEq("Errors['Errors.NotClaimable'] == 432", 432, errs['Errors.NotClaimable']);
+checkEq("Errors['Errors.SideUnderfunded1'] == 433", 433, errs['Errors.SideUnderfunded1']);
+checkEq("Errors['Errors.SideUnderfunded2'] == 434", 434, errs['Errors.SideUnderfunded2']);
 checkEq("Errors['Errors.NotSupervisor'] is absent", undefined, errs['Errors.NotSupervisor']);
 
 // The wrapper embeds a COPY of the compiled contract in

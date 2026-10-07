@@ -63,21 +63,26 @@ get fun `test manual execute_swap by owner1 works when everything is in`() {
     expect(escrow.canAutoExecuteNow()).toEqual(false);
     expect(escrow.phase()).toEqual(PHASE_ACTIVE);
 
-    // A manual execute_swap by owner1 with an extra gas top-up (ton("0.3")) —
-    // by design, manual execute does NOT check the balance (available is
-    // simply clamped to 0 if insufficient), so it goes through despite auto
-    // not having fired.
-    val res = escrow.sendText(o1.address, "execute_swap", ton("0.3"));
+    // execute_swap runs the same funding checks as auto-execution, so getting
+    // past them needs both sides actually funded: side 2's shortfall is
+    // topped up first (it does not on its own make side 1 funded, so this
+    // does not auto-execute), then owner1 calls execute_swap carrying its own
+    // shortfall plus gas — which is credited to side 1 before the checks run.
+    val (s1, s2) = escrow.executionShortfall();
+    expect(escrow.sendText(o2.address, "deposit_ton2", s2 + ton("0.05"))).toHaveAllSuccessfulTxs();
+    expect(escrow.phase()).toEqual(PHASE_ACTIVE);
+    val res = escrow.sendText(o1.address, "execute_swap", s1 + ton("0.05"));
     expect(res).toHaveAllSuccessfulTxs();
     expect(escrow.phase()).toEqual(PHASE_DONE);
     expect(readMockOwner(nft1)).toEqual(o2.address);
     expect(readMockOwner(nft2)).toEqual(o1.address);
 }
 
-get fun `test execute_swap by stranger rejected with 401`() {
+get fun `test execute_swap by stranger rejected with 403`() {
     val o1 = testing.treasury("st-o1");
     val o2 = testing.treasury("st-o2");
     val fw = testing.treasury("st-fw");
+    val stranger = testing.treasury("st-x");
     val empty1: map<uint16, address> = [];
     val empty2: map<uint16, address> = [];
     val cfg = EscrowConfig {
@@ -95,10 +100,10 @@ get fun `test execute_swap by stranger rejected with 401`() {
     };
     val escrow = deployEscrow(o1, cfg);
 
-    // execute_swap from o2 (not owner1) → exit ERR_NOT_OWNER1, regardless of
+    // execute_swap from neither owner → exit Errors.NotOwners, regardless of
     // deposit state (the sender check is the first assert in the handler).
-    val res = escrow.sendText(o2.address, "execute_swap", ton("0.1"));
-    expect(res).toHaveFailedTx({ to: escrow.address, exitCode: Errors.NotOwner1 });
+    val res = escrow.sendText(stranger.address, "execute_swap", ton("0.1"));
+    expect(res).toHaveFailedTx({ to: escrow.address, exitCode: Errors.NotOwners });
     expect(escrow.phase()).toEqual(PHASE_ACTIVE);
 }
 
@@ -157,15 +162,15 @@ get fun `test no auto-execute while NFTs missing`() {
 // pins the GRAM transfer amounts and their direction.
 //
 // Design: gram1Amount=1, gram2Amount=2 (asymmetric, so 1/2 cannot be
-// confused), 1×1 NFT. Asymmetric CONTRIBUTIONS (owner1 deposits a huge
-// surplus above gram1Amount, owner2 a minimal one) additionally check the
-// pro-rata refund: the LARGER CONTRIBUTOR (owner1, despite the SMALLER
-// nominal gram1Amount) must get the LARGER refund. If refund1/refund2 were
-// transposed in the code, or pro-rata were computed from a side's nominal
-// amount (gram2Amount=2 > gram1Amount=1) rather than from the actual
-// contribution, side 2 would get the larger refund instead of side 1, and
-// the assert below would fail.
-get fun `test GRAM cross-payment direction and pro-rata refund sanity`() {
+// confused), 1×1 NFT. Asymmetric SURPLUSES (owner1 deposits 10 above
+// gram1Amount, owner2 2 above gram2Amount) additionally check the refunds:
+// each side gets back its own surplus minus half the shared costs, so the
+// LARGER surplus (owner1, despite the SMALLER nominal gram1Amount) must come
+// back as the LARGER refund. If refund1/refund2 were transposed in the code,
+// or a refund were computed from a side's nominal amount (gram2Amount=2 >
+// gram1Amount=1) rather than from what it actually paid, the refund bands
+// below would not match.
+get fun `test GRAM cross-payment direction and refund sanity`() {
     val o1 = testing.treasury("gx-o1");
     val o2 = testing.treasury("gx-o2");
     val fw = testing.treasury("gx-fw");
@@ -191,15 +196,15 @@ get fun `test GRAM cross-payment direction and pro-rata refund sanity`() {
     };
     val escrow = deployEscrow(o1, cfg);
 
-    // owner1: gram1Amount(1) + a LARGE surplus (10) → contrib1 dominates.
+    // owner1: gram1Amount(1) + a LARGE surplus (10).
     expect(
         escrow.sendText(o1.address, "deposit_ton1", ton("1") + ton("10")),
     ).toHaveAllSuccessfulTxs();
     expect(escrow.sendText(o1.address, "service_fee_owner1", SERVICE_FEE)).toHaveAllSuccessfulTxs();
     expect(sendNftToEscrow(o1, nft1, escrow.address, ton("0.05"))).toHaveAllSuccessfulTxs();
-    // owner2: gram2Amount(2) + a minimal surplus (0.01, the same pattern as the other tests).
+    // owner2: gram2Amount(2) + a smaller surplus (2).
     expect(
-        escrow.sendText(o2.address, "deposit_ton2", ton("2") + ton("0.01")),
+        escrow.sendText(o2.address, "deposit_ton2", ton("2") + ton("2")),
     ).toHaveAllSuccessfulTxs();
     expect(sendNftToEscrow(o2, nft2, escrow.address, ton("0.05"))).toHaveAllSuccessfulTxs();
     val res = escrow.sendText(o2.address, "service_fee_owner2", SERVICE_FEE);
@@ -227,9 +232,9 @@ get fun `test GRAM cross-payment direction and pro-rata refund sanity`() {
         },
     });
 
-    // 2. Pro-rata refund sanity: owner1 is the larger actual contributor
-    // (contrib1 ≈ 11.05 vs contrib2 ≈ 2.06) → refund1 is substantially
-    // larger than refund2. The ranges below do NOT overlap with the
+    // 2. Refund sanity: owner1's surplus (10 + its NFT forward's excess over
+    // the transfer) comes back as refund1 ≈ 10.04, owner2's (2 + the same
+    // excess) as refund2 ≈ 2.04. The ranges below do NOT overlap with the
     // GRAM-exchange ranges above (refund1 > 4 TON, well above owner1's
     // GRAM-tx zone (<= 2 TON); refund2 is in (1.2, 4] TON — above owner2's
     // GRAM-tx zone (<= 1 TON) but below the refund1 zone, so both toHaveTx
@@ -251,11 +256,10 @@ get fun `test GRAM cross-payment direction and pro-rata refund sanity`() {
 }
 
 // Manual execute_swap — coverage of the serviceFee1(422)/serviceFee2(423)/
-// NftsNotReceived(424) gates. 420 (NotEnoughTon1)/401 (NotOwner1) are pinned
-// down (deploy.test.tolk
-// "test known command routes to its handler stub not 130" and
-// auto_execute.test.tolk "test execute_swap by stranger rejected with 401"
-// above).
+// NftsNotReceived(424) gates. execute_swap is open to both owners and closed
+// to everyone else: 420 (NotEnoughTon1) is pinned down by deploy.test.tolk
+// "test known command routes to its handler stub not 130", and 403
+// (NotOwners) by "test execute_swap by stranger rejected with 403" above.
 get fun `test execute_swap gate: missing service fee 1 yields 422`() {
     val o1 = testing.treasury("eg1-o1");
     val o2 = testing.treasury("eg1-o2");
@@ -413,22 +417,11 @@ get fun `test late in-deal NFT after DONE is auto-returned`() {
     expect(escrow.phase()).toEqual(PHASE_DONE);
 }
 
-// Negative check: no refund2 message when refund2==0.
-//
-// The API's matcher for the absence of a transaction is `toNotHaveTx`
-// (verified: .acton/emulation/network.tolk:1276 — `Expectation<SendResultList>`
-// has no `.not` property, `expect(x).not.toHaveTx(...)` does not compile;
-// there is a separate `toNotHaveTx` method with identical semantics).
-//
-// The case is made deterministic: side 2 has NEITHER assets NOR GRAM — its
-// contribution to the refund base is strictly 0 (the service fee is not
-// part of contrib), there is no GRAM exchange (both amounts are zero) → in
-// the final cascade there must be NO transaction at all from the escrow to
-// o2 (neither refund2 nor a GRAM transfer). The search is narrowed via
-// `from: escrow.address` so it does not catch the subsequent NFT-mock
-// forward to the new owner (o2 receives the NFT itself, but not a TON
-// transfer FROM the escrow).
-get fun `test no refund2 tx when side 2 contributed nothing`() {
+// A side with no assets and no TON leg pays its fee and its half of the shared
+// costs; anything it pays above that comes back to it on execute, together
+// with its half of what the deal received from nobody in particular (the
+// deploy remainder).
+get fun `test a side with no assets gets back its overpayment`() {
     val o1 = testing.treasury("nr2-o1");
     val o2 = testing.treasury("nr2-o2");
     val fw = testing.treasury("nr2-fw");
@@ -442,10 +435,19 @@ get fun `test no refund2 tx when side 2 contributed nothing`() {
     val escrow = deployEscrow(o1, cfg);
     expect(escrow.sendText(o2.address, "service_fee_owner2", SERVICE_FEE)).toHaveAllSuccessfulTxs();
     expect(escrow.sendText(o1.address, "service_fee_owner1", SERVICE_FEE)).toHaveAllSuccessfulTxs();
+    val (_s1, s2) = escrow.executionShortfall();
+    // side 2 pays its share and 0.5 TON more
+    expect(escrow.sendText(o2.address, "deposit_ton2", s2 + ton("0.5"))).toHaveAllSuccessfulTxs();
     val last = sendNftToEscrow(o1, nft1, escrow.address, ton("0.3"));
     expect(last).toHaveAllSuccessfulTxs();
     expect(escrow.phase()).toEqual(PHASE_DONE);
     expect(readMockOwner(nft1)).toEqual(o2.address); // the NFT reached side 2
-    // absence of refund2: in the `last` cascade there is NO transaction from the escrow to o2
-    expect(last).toNotHaveTx({ from: escrow.address, to: o2.address });
+    // 0.5 plus half the deploy remainder (about 0.024 TON)
+    expect(last).toHaveTx({
+        from: escrow.address,
+        to: o2.address,
+        value: fun(v: coins): bool {
+            return v >= ton("0.5") && v <= ton("0.55");
+        },
+    });
 }

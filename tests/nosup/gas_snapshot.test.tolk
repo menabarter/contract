@@ -10,7 +10,7 @@
 // send (Storage.runDistributionBatch — the retry loop and the cursor loop), i.e.
 // the batch self-limits. If a full K-batch crosses the soft cap, the actual
 // batch size is SMALLER than K ⇒ the chain needs MORE transactions than
-// ceil(n/K), which is what gasReserveForSwap/batchExtraReserve reserve gas
+// ceil(n/K), which is what gasReserveForSwap/batchChainReserve reserve gas
 // for ⇒ the reserve is underestimated ⇒ the deal can get parked in
 // EXECUTING (the guarantee that a funded deal completes is violated).
 //

@@ -179,6 +179,18 @@ fun SwapEscrowNosup.canAutoExecuteNow(self): bool {
     return net.runGetMethod(self.address, "canAutoExecuteNow");
 }
 
+fun SwapEscrowNosup.executionShortfall(self): (int, int) {
+    return net.runGetMethod(self.address, "executionShortfall");
+}
+
+fun SwapEscrowNosup.cancelCost(self): (int, int) {
+    return net.runGetMethod(self.address, "cancelCost");
+}
+
+fun SwapEscrowNosup.storageFloor(self): int {
+    return net.runGetMethod(self.address, "storageFloor");
+}
+
 fun SwapEscrowNosup.receivedCounts(self): (int, int) {
     return net.runGetMethod(self.address, "receivedCounts");
 }

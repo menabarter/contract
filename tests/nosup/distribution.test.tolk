@@ -109,8 +109,9 @@ fun runCaptureSwap(
 // distribution (dist.mode = DIST_EXECUTE, cursor = 0). Since the emulator
 // applies the continue cascade atomically (STEP 0), an escrow "caught" in
 // EXECUTING cannot be produced by a natural run — the state is constructed
-// directly in Storage and deployed with an empty transfer (handlePlainTransfer
-// from owner1 does not touch dist/phase). The asset registry is filled with
+// directly in Storage and deployed with an `Excesses` message (Excesses is
+// credited silently in any phase, so it does not touch dist/phase). The
+// asset registry is filled with
 // dummy addresses (the gate tests do not read it — only the phase/sender
 // gates are checked, the cursor never moves).
 struct ExecFixture {
@@ -144,14 +145,17 @@ fun deployExecuting(tag: string): ExecFixture {
     }.toCell();
 
     val escrow = SwapEscrowNosup.fromStorage(st);
-    // An empty transfer from owner1: handlePlainTransfer only credits and
-    // saves gram1Received — it does not touch the EXECUTING phase or dist
-    // (tryAutoExecute requires phase == ACTIVE). Gives the escrow a balance
-    // and "activates" the deployed state.
+    // An `Excesses` message: credited silently in any phase, so it does not
+    // touch the EXECUTING phase or dist. Gives the escrow a balance and
+    // "activates" the deployed state.
     val deployMsg = createMessage({
         bounce: false,
         value: ton("1"),
         dest: { stateInit: escrow.stateInit! },
+        // Excesses is credited silently in any phase, so the escrow can be
+        // deployed straight into EXECUTING or CANCELLED without passing
+        // through a deposit handler.
+        body: Excesses { queryId: 0 },
     });
     expect(net.send(o1.address, deployMsg)).toHaveSuccessfulDeploy({ to: escrow.address });
     expect(escrow.phase()).toEqual(PHASE_EXECUTING);
@@ -208,12 +212,12 @@ get fun `test fast path boundary: 100 assets single tx, 101 assets batched`() {
     expect(c2.escrow.distributionProgress().1).toEqual(101);
 }
 
-get fun `test refund in final batch matches contributions pro-rata`() {
+get fun `test final batch sends the legs, the fee and the refunds and keeps the floor`() {
     // A large deal (101 assets, the batched path) with GRAM on both sides.
     // gram1 = 1 goes to owner2, gram2 = 0.5 goes to owner1 (an exchange of opposites).
     val gram1 = ton("1");
     val gram2 = ton("0.5");
-    val c = runCaptureSwap("prorata", 51, 50, gram1, gram2);
+    val c = runCaptureSwap("fbrefund", 51, 50, gram1, gram2);
     expect(c.escrow.phase()).toEqual(PHASE_DONE);
 
     // The GRAM exchange goes out as SEPARATE messages in the final batch:
@@ -243,10 +247,10 @@ get fun `test refund in final batch matches contributions pro-rata`() {
         },
     });
     // NFT owners are swapped cross-wise.
-    // THE MAIN POINT: the final batch's dust sweep empties the escrow
-    // balance to zero (refunds are clamped to 0, so they cannot be negative
-    // by construction).
-    expect(testing.getAccountBalance(c.escrow.address)).toEqual(0);
+    // THE MAIN POINT: the final batch's dust sweep leaves exactly the storage
+    // floor on the escrow (refunds are clamped to 0, so they cannot be
+    // negative by construction).
+    expect(testing.getAccountBalance(c.escrow.address)).toEqual(c.escrow.storageFloor());
     // Distribution completed: the registry has been walked.
     val progress = c.escrow.distributionProgress();
     expect(progress.0).toEqual(DIST_IDLE);
@@ -267,7 +271,7 @@ get fun `test continue_distribution from stranger rejected 403`() {
         .sendContinueDistribution(
             mallory.address,
             0,
-            { value: CONTINUE_MSG_VALUE, bounce: true },
+            { value: ton("0.05"), bounce: true },
         );
     expect(res).toHaveFailedTx({ to: f.escrow.address, exitCode: Errors.NotOwners });
     // Progress did not move (the transaction rolled back atomically).

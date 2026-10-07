@@ -16,14 +16,30 @@ get fun `test parity #1: 1x1 NFT no GRAM`() {
 }
 
 // #2: a minimal case — GRAM only on side 2, side 1
-// deposits nothing material (0 NFT / 0 GRAM).
+// deposits nothing material (0 NFT / 0 GRAM). The TON-only side tops up its
+// half of the shared costs (execution gas, dust, the storage floor), which
+// its leg and fee alone do not carry.
 get fun `test parity #2: 1x0 NFT with GRAM2 only`() {
-    runFullSwap(1, 0, 0, ton("1"), ton("0.20"));
+    runFullSwap(
+        1,
+        0,
+        0,
+        ton("1"),
+        ton("0.20"),
+        true,
+    );
 }
 
-// #3: the mirror of #2 — GRAM only on side 1.
+// #3: the mirror of #2 — GRAM only on side 1, with the same top-up.
 get fun `test parity #3: 0x1 NFT with GRAM1 only`() {
-    runFullSwap(0, 1, ton("1"), 0, ton("0.20"));
+    runFullSwap(
+        0,
+        1,
+        ton("1"),
+        0,
+        ton("0.20"),
+        true,
+    );
 }
 
 // #4: 5×5 NFT, no GRAM.

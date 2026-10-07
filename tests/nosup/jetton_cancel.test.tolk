@@ -140,14 +140,13 @@ fun setupAsymMixedFixture(tag: string, seed: int): AsymMixedFixture {
 // reaches the escrow WITHOUT the forward fee deducted, see
 // nft_item_mock.tolk/jetton_wallet_mock.tolk).
 // return1Cost = NFT_TRANSFER_VALUE(0.03)*1 + JETTON_TRANSFER_VALUE(0.05)*2 = 0.13.
-// refund1 = gram1Received(0) + serviceFee1(0) + max(0, 0.7-0.13) = 0.57 nominally.
-// reserve2 = 0.1(jetton50). return2Cost = 0.05*1 = 0.05.
-// refund2 = gram2Received(0) + serviceFee2(0) + max(0, 0.1-0.05) = 0.05 nominally.
-// Windows: a tolerance of ~5% on the low side (the forward fee of the
-// outgoing SEND_MODE_REGULAR refund message), the upper bound slightly
-// above nominal — but the sides' windows do not overlap (0.54-0.571 vs
-// 0.047-0.051), so a transposition of reserve1<->reserve2 (which would
-// give refund1≈0.05, refund2≈0.57) would reliably fail this test.
+// Side 1's net contribution N1 = 0.7 - 0.13 = 0.57.
+// reserve2 = 0.1(jetton50). return2Cost = 0.05*1 = 0.05; N2 = 0.05.
+// Each refund is N_i less half the shared costs (gas, dust) plus half the
+// deploy remainder, which arrived unattributed; the refunds differ by exactly
+// N1 - N2 = 0.52. Measured: refund1 = 0.597652, refund2 = 0.077652.
+// The sides' windows do not overlap (0.585-0.61 vs 0.065-0.09), so a
+// transposition of reserve1<->reserve2 would reliably fail this test.
 get fun `test asymmetricMixedCancelPinsPerSideRefundWindows`() {
     val f = setupAsymMixedFixture("f1c", 71);
     val res = f.escrow.sendText(f.o1.address, "cancel_swap", ton("0.3"));
@@ -164,14 +163,14 @@ get fun `test asymmetricMixedCancelPinsPerSideRefundWindows`() {
         from: f.escrow.address,
         to: f.o1.address,
         value: fun(v: coins): bool {
-            return v >= ton("0.54") && v <= ton("0.571");
+            return v >= ton("0.585") && v <= ton("0.61");
         },
     });
     expect(res).toHaveTx({
         from: f.escrow.address,
         to: f.o2.address,
         value: fun(v: coins): bool {
-            return v >= ton("0.047") && v <= ton("0.051");
+            return v >= ton("0.065") && v <= ton("0.09");
         },
     });
 }

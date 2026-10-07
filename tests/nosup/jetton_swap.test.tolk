@@ -275,6 +275,9 @@ get fun `test manual execute_swap with jettons: fails 424 before deposit, then a
     val escrow = deployEscrow(o1, cfg);
     expect(escrow.sendText(o1.address, "service_fee_owner1", SERVICE_FEE)).toHaveAllSuccessfulTxs();
     expect(escrow.sendText(o2.address, "service_fee_owner2", SERVICE_FEE)).toHaveAllSuccessfulTxs();
+    // Side 2 has no assets: it pays its half of the shared costs as TON.
+    val (_s1, s2) = escrow.executionShortfall();
+    expect(escrow.sendText(o2.address, "deposit_ton2", s2)).toHaveAllSuccessfulTxs();
     // the jetton has not been deposited yet → execute_swap fails with 424 (NftsNotReceived — the general "assets not collected" code)
     expect(escrow.sendText(o1.address, "execute_swap", ton("0.1"))).toHaveTx({
         to: escrow.address,

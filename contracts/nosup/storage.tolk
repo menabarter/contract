@@ -18,6 +18,31 @@ const SERVICE_FEE = ton("0.1")
 const NFT_TRANSFER_VALUE = ton("0.03")
 const DUST = ton("0.003")
 
+// Storage floor: a settled escrow keeps one year of storage fees so its pull
+// path does not die with a frozen account. The contract cannot read its own
+// size, so bits and cells are modelled from the registry size and priced by
+// calculateStorageFee against the current network storage prices. Calibrated
+// in tests/nosup/storage_floor.test.tolk: the model must stay between 1x and
+// 1.5x of the measured fee on NFT and jetton registries.
+// Under today's prices a cell costs about 64,962 nanoton a year and bits are
+// priced near zero, so the cell terms carry the model. Measured: each registry
+// entry adds 2 cells (129,924 nanoton a year per entry between 300 and 1,000
+// entries), the rest of the state about 176 cells. Year fee, measured / model:
+// 1x1 NFT 11,693,189 / 16,500,389 (1.41x); 300 entries 50,410,635 /
+// 55,217,835 (1.10x); 1,000 entries 141,357,657 / 146,164,856 (1.034x); a
+// two-jetton deal 11,693,189 / 16,500,389 (1.41x). The margin is the 74 cells
+// of base above the measured 176, so the code can grow by about 50 cells
+// before the 1,000-entry case drops below 1x; the per-entry term is exact.
+// The bits terms
+// only matter if bit prices rise: an Asset is 590 bits for a jetton (two
+// addresses and an amount) and 283 for an NFT, plus the dictionary labels,
+// so 700 per entry covers the wider jetton entry.
+const STORAGE_FLOOR_SECONDS = 31536000
+const STORAGE_BITS_BASE = 20000
+const STORAGE_CELLS_BASE = 250
+const STORAGE_BITS_PER_ASSET = 700
+const STORAGE_CELLS_PER_ASSET = 2
+
 // Gas cost is stored in GAS UNITS (config-independent), converted to TON via
 // calculateGasFee (GETGASFEE) against the CURRENT network config (the same
 // pattern as TON's reference stablecoin contract). The units correspond to
@@ -57,6 +82,12 @@ const PROVIDE_WALLET_VALUE = ton("0.02")
 // chose 3000 (≈2.45×, the same margin style as EXEC_GAS_UNITS_PER_SEND).
 const DEPLOY_GAS_UNITS_PER_ASSET = 3000
 
+// Registry-size-independent part of one deploy_fee call (argument parsing,
+// minter dedup map, the provide loop over unique minters). Measured: a call on
+// a 1-entry registry uses 8,406 gas, of which DEPLOY_GAS_UNITS_PER_ASSET covers
+// 3,000; 15,000 leaves ~2.8x over the remaining 5,406.
+const DEPLOY_BASE_GAS_UNITS = 15000
+
 // The same scaling problem recurs one level deeper in the cascade (deploy ->
 // ProvideWalletAddress -> TakeWalletAddress), and it is the one that bites
 // first: a 100-asset deal owned by a single minter fails in the minter's
@@ -88,7 +119,7 @@ enum Errors {
     NotOwner1 = 401
     NotOwner2 = 402
     NotOwners = 403
-    NotRecipient = 405  // claim_asset from anyone but the asset's rightful recipient
+    NotRecipient = 405     // claim_asset from anyone but the asset's rightful recipient
     AlreadyFinalized = 410
     NotEnoughTon1 = 420
     NotEnoughTon2 = 421
@@ -96,8 +127,10 @@ enum Errors {
     ServiceFee2 = 423
     NftsNotReceived = 424
     InsufficientBalance = 430
-    BadAssetIndex = 431 // claim_asset on an index outside the registry
-    NotClaimable = 432  // claim_asset on an asset that is not currently claimable
+    BadAssetIndex = 431    // claim_asset on an index outside the registry
+    NotClaimable = 432     // claim_asset on an asset that is not currently claimable
+    SideUnderfunded1 = 433 // side 1 has not paid its own costs plus half the shared ones
+    SideUnderfunded2 = 434 // the same for side 2
     UnknownOp = 0xFFFF
 }
 
@@ -121,23 +154,50 @@ const QUERY_ID_NON_ASSET = 0xFFFE // jetton excess refunds
 // docs.ton.org/foundations/limits).
 const FAST_PATH_MAX_ASSETS = 100 // <=100 assets uses the single-transaction path (proven up to 231/154)
 const BATCH_MAX_SENDS = 50
-// GASCONSUMED safety valve (TVM 2023.07, 26 gas/call; in Tolk —
-// getGasConsumedAtTheMoment, stdlib gas-payments.tolk): the batch stops
-// early once compute has eaten this much — the remainder ships in the next
-// batch. 600k out of 1M: 400k reserved for the transaction tail (dist
-// write, continue message, action serialization) — errs only on the safe
-// side.
+// GASCONSUMED safety valve (26 gas per call; getGasConsumedAtTheMoment in
+// stdlib gas-payments.tolk): a batch stops once compute has used this much and
+// the rest ships in the next batch. The largest measured batch is 605,295 gas
+// (a 1,200-entry batch cancel's initiating transaction with two deposits —
+// its walk and sends run inside the same gas count as a continued batch's;
+// a skip-limited chain measured 605,088 with one shared skip address and
+// 605,286 with a distinct address per entry) — at most 5,295 over the cap
+// for the iteration that crosses it. The transaction that runs a continued
+// batch is funded by the continue message alone, so the ceiling that matters
+// is what CONTINUE_GAS_UNITS buys.
 const BATCH_GAS_SOFT_CAP = 600000
-// Gas reserve surcharge for EACH additional batch: base for a new compute
-// phase (45000) + one dist write (9000) + headroom for the continue-fwd
-// ≈ 60000 units.
+// Base cost of one additional batch transaction: a new compute phase (45000),
+// one dist write (9000), headroom for building the continue message. Measured
+// against the cheapest real batch — a cancel's finalize step, which does no
+// registry walk: 13,528 gas, so 60,000 is about 4.4x that.
 const BATCH_EXTRA_GAS_UNITS = 60000
-// value of the continue_distribution self-message: dest = the contract
-// itself, so the value returns to the balance on arrival (only the fwd fee
-// is spent); it bounces on failure (BounceMode.Only256BitsOfBody in the
-// actual send) — a failed batch returns the value, and a kick resumes from
-// the same point.
-const CONTINUE_MSG_VALUE = ton("0.05")
+// Gas a cancel_swap needs to reach its balance check (storage load, counters,
+// the quote); after the check the transaction's gas comes from the reserve
+// inside `required`. A 1x1 cancel carrying 0.001 TON (15,000 gas) ran out
+// before the check, 0.003 TON (45,000) passed with 20,502 in total. 40,000
+// units cover the pre-check part on any registry size (the quote is O(1)).
+const CANCEL_PRECHECK_GAS_UNITS = 40000
+// Gas to walk past one registry entry that is not sent: a dictionary step and
+// the loop. Measured: a skip-limited chain over 2,050 entries used 3.0M gas,
+// about 1,460 per entry; a cancel batch over 101-300 entries grows by about
+// 1,270 per entry; the fast-path cancel loop about 920 per entry. 2,200 is
+// 1.5x the largest.
+const SKIP_GAS_UNITS_PER_ENTRY = 2200
+// Gas units the self-addressed continue_distribution message buys. It is sent
+// in mode 0, so its value is calculateGasFee(CONTINUE_GAS_UNITS) plus its own
+// forwarding fee (see continueMsgValue): the gas it buys is the same at any gas
+// price. 730,000 is about 1.21x the largest measured batch (605,295, a
+// 1,200-entry registry's batch cancel with two deposits); a batch cancel's
+// initiating transaction on the same 1,200-entry registry used 604,936 with
+// no deposits. The value returns to the balance on arrival — only the
+// forwarding fee and the gas used are spent. A batch cancel's initiating
+// transaction runs only its first batch, so its gas limit is capped here too
+// (cancelTxGasUnits).
+const CONTINUE_GAS_UNITS = 730000
+// Hard compute ceiling of an ordinary basechain transaction (GasPricesExtended.
+// gasLimit, see .acton/emulation/config.tolk): setGasLimit never grants more,
+// so a reserve priced for more units would only pay for gas that cannot be
+// used (cancelTxGasUnits).
+const TX_GAS_LIMIT_CEILING = 1000000
 
 // Delivery modes (who receives the batch):
 const DIST_IDLE = 0 // no delivery in progress

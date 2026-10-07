@@ -62,17 +62,27 @@ get fun `test cancel by owner2 returns deposits and received NFTs`() {
     expect(readMockOwner(nftIn)).toEqual(o1.address);
     expect(readMockOwner(nftOut)).toEqual(o1.address);
 
-    // refund1 = gram1Received(1.01) + serviceFee1(0.1) + reserve1Rem(0.05-0.03=0.02)
-    // = 1.13 nominally; the forward fee under SEND_MODE_REGULAR trims it a
-    // bit — a tolerance band on the low side.
+    // Side 1's net contribution: gram1Received(1.01) + serviceFee1(0.1) +
+    // deposit reserve(0.05) - its return(0.03) = 1.13; side 2's is 0. Each
+    // refund is that less half the shared costs (gas, dust) plus half the
+    // deploy remainder, which arrived unattributed; the remainder is the
+    // larger, so both refunds come out above the net contributions and differ
+    // by exactly 1.13. Measured: refund1 = 1.141074, refund2 = 0.011074.
     expect(res).toHaveTx({
         from: escrow.address,
         to: o1.address,
         value: fun(v: coins): bool {
-            return v >= ton("1.1") && v <= ton("1.14");
+            return v >= ton("1.14") && v <= ton("1.16");
         },
     });
-    // owner2 deposited nothing → refund2 == 0 → no separate message to owner2.
+    // owner2 deposited nothing: it gets only its half of what was shared.
+    expect(res).toHaveTx({
+        from: escrow.address,
+        to: o2.address,
+        value: fun(v: coins): bool {
+            return v >= ton("0.01") && v <= ton("0.03");
+        },
+    });
 }
 
 // The existing cancel test only covers refund1 != 0 / refund2 == 0 (side 2
@@ -146,21 +156,23 @@ get fun `test cancel with both refunds nonzero returns both sides`() {
     expect(readMockOwner(nft2In)).toEqual(o2.address);
     expect(readMockOwner(nft2Out)).toEqual(o2.address);
 
-    // refund1 = gram1Received(1.01) + serviceFee1(0.1) + reserve1Rem(0.05-0.03=0.02)
-    // ≈ 1.13; refund2 = gram2Received(2.01) + serviceFee2(0.1) + reserve2Rem(0.02)
-    // ≈ 2.13 — the same formula/tolerance as the one-sided cancel test above.
+    // Net contributions: N1 = 1.01 + 0.1 + 0.05 - 0.03 = 1.13 and
+    // N2 = 2.01 + 0.1 + 0.05 - 0.03 = 2.13. Each refund is N_i less half the
+    // shared costs plus half the deploy remainder — the same formula as the
+    // one-sided cancel test above; the refunds differ by exactly 1.0.
+    // Measured: refund1 = 1.139420, refund2 = 2.139420.
     expect(res).toHaveTx({
         from: escrow.address,
         to: o1.address,
         value: fun(v: coins): bool {
-            return v >= ton("1.1") && v <= ton("1.14");
+            return v >= ton("1.13") && v <= ton("1.15");
         },
     });
     expect(res).toHaveTx({
         from: escrow.address,
         to: o2.address,
         value: fun(v: coins): bool {
-            return v >= ton("2.1") && v <= ton("2.14");
+            return v >= ton("2.13") && v <= ton("2.15");
         },
     });
 }
