@@ -442,3 +442,175 @@ get fun `test fallbackPrefersExactAmountSlot`() {
     expect(escrow.receivedCounts().0).toEqual(2);
     expect(readJettonBalance(minter, escrow.address)).toEqual(ton("130"));
 }
+
+// A jetton transfer carrying an arbitrary forward payload.
+fun sendJettonWithPayload(
+    owner: Treasury,
+    minter: address,
+    destOwner: address,
+    amount: coins,
+    forwardTon: coins,
+    payload: slice,
+): SendResultList {
+    val m = createMessage({
+        bounce: BounceMode.Only256BitsOfBody,
+        value: forwardTon + ton("0.08"),
+        dest: jwAddr(minter, owner.address),
+        body: JettonTransfer {
+            queryId: 7,
+            amount,
+            destination: destOwner,
+            responseDestination: owner.address,
+            customPayload: null,
+            forwardTonAmount: forwardTon,
+            forwardPayload: payload,
+        },
+    });
+    return net.send(owner.address, m);
+}
+
+// A deal with a jetton of `minter` on side 1 and one of a minter that never
+// answers on side 2: it stays in SETUP. `silentFirst` puts the silent minter's
+// slot first in the registry.
+struct SetupDeal {
+    escrow: EscrowFixture
+    o1: Treasury
+    o2: Treasury
+    minter: address
+    silent: Treasury
+}
+
+fun setupWithSilentMinter(tag: string, seed: int, silentFirst: bool): SetupDeal {
+    val o1 = testing.treasury(tagged(tag, "-o1"));
+    val o2 = testing.treasury(tagged(tag, "-o2"));
+    val fw = testing.treasury(tagged(tag, "-fw"));
+    val silent = testing.treasury(tagged(tag, "-silent"));
+    val minter = deployJettonMinter(o1, seed);
+    mintJettons(minter, o1, ton("500"));
+    var cfg = makeBasicConfig(o1, o2, fw);
+    val ours = JettonCfg {
+        minter,
+        ownerSide: 1,
+        amount: ton("100"),
+    };
+    val theirs = JettonCfg {
+        minter: silent.address,
+        ownerSide: 2,
+        amount: ton("5"),
+    };
+    var js: map<uint16, JettonCfg> = [];
+    js.set(0, silentFirst ? theirs : ours);
+    js.set(1, silentFirst ? ours : theirs);
+    cfg.jettons = js;
+    cfg.jettonsCount = 2;
+    val escrow = deployEscrow(o1, cfg);
+    expect(escrow.phase()).toEqual(PHASE_SETUP);
+    return SetupDeal { escrow, o1, o2, minter, silent };
+}
+
+// A minter's take_wallet_address that arrives after the deal was cancelled in
+// SETUP must be ignored: resolving the last pending minter would otherwise
+// switch the cancelled deal back to ACTIVE.
+get fun `test a late wallet address after cancel leaves the deal cancelled`() {
+    val d = setupWithSilentMinter("jt15", 35, false);
+    val (_req, attach) = d.escrow.cancelCost();
+    expect(d.escrow.sendText(d.o1.address, "cancel_swap", attach)).toHaveAllSuccessfulTxs();
+    expect(d.escrow.phase()).toEqual(PHASE_CANCELLED);
+    val late = createMessage({
+        bounce: BounceMode.NoBounce,
+        value: ton("0.05"),
+        dest: d.escrow.address,
+        body: TakeWalletAddress {
+            queryId: 0,
+            walletAddress: d.silent.address,
+            rest: beginCell().storeUint(0, 1).endCell().beginParse(),
+        },
+    });
+    net.send(d.silent.address, late);
+    expect(d.escrow.phase()).toEqual(PHASE_CANCELLED);
+    expect(d.escrow.pendingWalletsLeft()).toEqual(1);
+}
+
+// An unhinted deposit walks the registry past a slot whose minter has not
+// answered yet; that slot must simply not match, and the deposit must land
+// in its own slot.
+get fun `test an unhinted deposit walks past an unresolved slot`() {
+    val d = setupWithSilentMinter("jt16", 36, true);
+    expect(
+        sendJettonTransfer2(
+            d.o1,
+            d.minter,
+            d.escrow.address,
+            ton("100"),
+            ton("0.05"),
+            -1,
+        ),
+    ).toHaveAllSuccessfulTxs();
+    expect(d.escrow.receivedCounts().0).toEqual(1);
+    expect(readJettonBalance(d.minter, d.escrow.address)).toEqual(ton("100"));
+}
+
+// A payload whose either-bit says "in a reference" carries no hint, even when
+// 16 more bits follow inline. Read as a hint here, those bits would point the
+// 30-jetton deposit at the 100-jetton slot and return it as an underpayment;
+// without a hint the exact-amount pass finds the 30 slot.
+get fun `test a reference payload carries no hint`() {
+    val o1 = testing.treasury("jt17-o1");
+    val o2 = testing.treasury("jt17-o2");
+    val fw = testing.treasury("jt17-fw");
+    val minter = deployJettonMinter(o1, 37);
+    mintJettons(minter, o1, ton("500"));
+    var cfg = makeBasicConfig(o1, o2, fw);
+    var js: map<uint16, JettonCfg> = [];
+    js.set(
+        0,
+        JettonCfg {
+            minter,
+            ownerSide: 1,
+            amount: ton("100"),
+        },
+    );
+    js.set(
+        1,
+        JettonCfg {
+            minter,
+            ownerSide: 1,
+            amount: ton("30"),
+        },
+    );
+    cfg.jettons = js;
+    cfg.jettonsCount = 2;
+    val escrow = deployEscrow(o1, cfg);
+    val payload = beginCell().storeUint(1, 1).storeUint(0, 16).endCell().beginParse();
+    expect(
+        sendJettonWithPayload(
+            o1,
+            minter,
+            escrow.address,
+            ton("30"),
+            ton("0.05"),
+            payload,
+        ),
+    ).toHaveAllSuccessfulTxs();
+    expect(escrow.receivedCounts().0).toEqual(1);
+    expect(readJettonBalance(minter, escrow.address)).toEqual(ton("30"));
+}
+
+// A return costs RETURN_TRANSFER_VALUE; with less attached it is not
+// attempted, and an underpaid deposit's tokens stay in the escrow's wallet
+// (the documented risk) instead of being sent back on too little value.
+get fun `test an underpaid deposit with too little value is not returned`() {
+    val f = jdSetup("jt18", 38);
+    expect(
+        sendJettonTransfer2(
+            f.o1,
+            f.minter,
+            f.escrow.address,
+            ton("40"),
+            ton("0.02"),
+            0,
+        ),
+    ).toHaveAllSuccessfulTxs();
+    expect(f.escrow.receivedCounts().0).toEqual(0);
+    expect(readJettonBalance(f.minter, f.escrow.address)).toEqual(ton("40"));
+}
