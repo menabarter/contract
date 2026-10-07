@@ -19,7 +19,14 @@ struct Pending {
 
 // n x n NFT deal, fees paid, every NFT deposited with `forward`; with a small
 // forward the sides cannot cover their own transfers, so nothing executes.
-fun pending(tag: string, seed: int, n: int, forward: coins, gram2: coins): Pending {
+fun pending(
+    tag: string,
+    seed: int,
+    n: int,
+    forward: coins,
+    gram2: coins,
+    gram1: coins = 0,
+): Pending {
     val o1 = testing.treasury(tagged(tag, "-o1"));
     val o2 = testing.treasury(tagged(tag, "-o2"));
     val fw = testing.treasury(tagged(tag, "-fw"));
@@ -36,6 +43,7 @@ fun pending(tag: string, seed: int, n: int, forward: coins, gram2: coins): Pendi
     cfg.nfts1Count = n;
     cfg.nfts2 = b;
     cfg.nfts2Count = n;
+    cfg.gram1Amount = gram1;
     cfg.gram2Amount = gram2;
     val escrow = deployEscrow(o1, cfg);
     expect(escrow.sendText(o1.address, "service_fee_owner1", SERVICE_FEE)).toHaveAllSuccessfulTxs();
@@ -181,6 +189,36 @@ get fun `test executionShortfall accounts for the unpaid leg`() {
         p.escrow.sendText(p.o2.address, "execute_swap", s2 + ton("0.05")),
     ).toHaveAllSuccessfulTxs();
     expect(p.escrow.phase()).toEqual(PHASE_DONE);
+}
+
+// The same for side 1: its forwards fund its share, its TON leg is unpaid, and
+// the figure must cover the leg.
+get fun `test executionShortfall accounts for side 1's unpaid leg`() {
+    val p = pending(
+        "es-leg1",
+        79161,
+        2,
+        ton("0.2"),
+        0,
+        ton("1"),
+    );
+    expect(p.escrow.phase()).toEqual(PHASE_ACTIVE);
+    val g = p.escrow.gramState();
+    expect(g.gram1Received).toEqual(0); // the leg is unpaid
+    val (s1, _s2) = p.escrow.executionShortfall();
+    expect(s1 >= g.gram1Amount - g.gram1Received).toEqual(true);
+    expect(
+        p.escrow.sendText(p.o1.address, "execute_swap", s1 + ton("0.05")),
+    ).toHaveAllSuccessfulTxs();
+    expect(p.escrow.phase()).toEqual(PHASE_DONE);
+}
+
+// A settled deal has no balance check left to pass: once it has executed,
+// neither side owes anything, whatever its balance now holds.
+get fun `test executionShortfall is zero once the deal has executed`() {
+    val p = pending("es-done", 79171, 2, ton("0.2"), 0);
+    expect(p.escrow.phase()).toEqual(PHASE_DONE);
+    expect(p.escrow.executionShortfall()).toEqual((0, 0));
 }
 
 // What execute_swap carries is credited to the caller before the checks, so a

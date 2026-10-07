@@ -1797,10 +1797,10 @@ get fun canAutoExecuteNow(): bool {
 // The balance check reads the balance before the paying message's own gas, so
 // the payment that completes the deal needs nothing extra. When both sides pay
 // figures read at the same time, the first payment's processing gas
-// (824,601 nanoton for a deposit_ton1/2 at today's gas price, measured by
+// (758,401 nanoton for a deposit_ton1/2 at today's gas price, measured by
 // tests/nosup/execute_swap.test.tolk) comes off the balance before the second
 // arrives, so each side adds 0.001 TON to its figure (one side's 0.001 alone
-// covers that gas with a 21% margin).
+// covers that gas with a 32% margin).
 // After one side's payment has landed its figure is only its half of the
 // remaining deficit, and the other side can pay both figures together.
 // Deposits still to come add their attached value. Walks the registry.
