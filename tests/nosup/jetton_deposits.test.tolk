@@ -135,6 +135,26 @@ get fun `test overpaymentAcceptedExcessReturned`() {
     );                                                                         // 500-130+30, the excess was returned
 }
 
+// Without a hint, no slot matches the overpaid amount exactly, so the second
+// pass of the fallback (any slot of this wallet and depositor) must find the
+// slot: the deposit is accepted and only the excess comes back, rather than
+// the whole transfer being returned as a foreign jetton.
+get fun `test overpaymentWithoutHintAcceptedExcessReturned`() {
+    val f = jdSetup("jt6u", 97);
+    val res = sendJettonTransfer2(
+        f.o1,
+        f.minter,
+        f.escrow.address,
+        ton("130"),
+        ton("0.08"),
+        -1,
+    );
+    expect(res).toHaveAllSuccessfulTxs();
+    expect(f.escrow.receivedCounts().0).toEqual(1);
+    expect(readJettonBalance(f.minter, f.escrow.address)).toEqual(ton("100"));
+    expect(readJettonBalance(f.minter, f.o1.address)).toEqual(ton("400"));
+}
+
 // The excess refund must carry a NON-ASSET queryId. It is sent with
 // BounceMode.Only256BitsOfBody, so a refund built with queryId 0 would, if it
 // bounced, be read by onBouncedMessage as a bounce of asset index 0 —
