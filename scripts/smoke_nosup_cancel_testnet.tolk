@@ -218,7 +218,11 @@ fun main() {
     println("phase before cancel = {} (expected 1 = ACTIVE)", phaseBefore);
 
     waitTrace(
-        escrow.sendAny(wallet2.address, textBody("cancel_swap"), { value: CHEAP_CANCEL, bounce: true }),
+        escrow.sendAny(
+            wallet2.address,
+            textBody("cancel_swap"),
+            { value: CHEAP_CANCEL, bounce: true },
+        ),
         "cancel_swap with a token amount (must be refused)",
     );
     val phaseAfterCheap = net.runGetMethod<int>(escrow.address, "phase");
@@ -246,7 +250,11 @@ fun main() {
     println("nft1 owner = {} (expected wallet1 {})", nft1Owner, wallet1.address);
     println("nft2 owner = {} (expected wallet2 {})", nft2Owner, wallet2.address);
     println("wallet1 received {} (expected >= TON leg + fee = {})", w1Gain, GRAM1 + SERVICE_FEE);
-    println("escrow balance = {}, storageFloor = {} (expected balance >= floor)", escrowBalance, floor);
+    println(
+        "escrow balance = {}, storageFloor = {} (expected balance >= floor)",
+        escrowBalance,
+        floor,
+    );
 
     val ok = phaseBefore == PHASE_ACTIVE && phaseAfterCheap == PHASE_ACTIVE &&
         phaseAfter == PHASE_CANCELLED &&

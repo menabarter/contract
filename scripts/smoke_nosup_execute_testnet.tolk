@@ -218,7 +218,11 @@ fun main() {
     // which would look like the escrow ignoring execute_swap.
     val w2Balance = scripts.fetchAccountBalance(wallet2.address);
     if (w2Balance < shortfall.1 + ton("0.02")) {
-        println("[ABORT] wallet2 holds {}, not enough to send {} — top it up and rerun", w2Balance, shortfall.1);
+        println(
+            "[ABORT] wallet2 holds {}, not enough to send {} — top it up and rerun",
+            w2Balance,
+            shortfall.1,
+        );
         return;
     }
 
@@ -245,7 +249,11 @@ fun main() {
     println("nft1 owner = {} (expected wallet2 {})", nft1Owner, wallet2.address);
     println("nft2 owner = {} (expected wallet1 {})", nft2Owner, wallet1.address);
     println("wallet1 received {} (expected >= TON leg {})", w1Gain, GRAM2);
-    println("escrow balance = {}, storageFloor = {} (expected balance >= floor)", escrowBalance, floor);
+    println(
+        "escrow balance = {}, storageFloor = {} (expected balance >= floor)",
+        escrowBalance,
+        floor,
+    );
 
     val ok = phaseBefore == PHASE_ACTIVE && shortfall.0 == 0 && shortfall.1 >= GRAM2 &&
         phaseAfter == PHASE_DONE &&
