@@ -795,9 +795,11 @@ fun Asset.walletPending(self): bool {
 }
 
 // The minters a discovery round asks, found in one pass over the registry:
-// each minter with a pending slot once, in registry order.
+// each minter with a pending slot once, in registry order, and how many of
+// its slots are pending.
 struct DiscoveryPlan {
     minters: map<uint16, address> // numbered 0..count-1
+    slots: map<uint16, uint16>    // pending slots of each numbered minter
     count: int
 }
 
@@ -810,37 +812,42 @@ struct DiscoveryPlan {
 // storage.tolk): the provides go out in a second, cheap pass over the unique
 // minters only (sendProvides).
 fun Storage.planDiscovery(self): DiscoveryPlan {
-    var seen: map<address, bool> = [];
+    var seen: map<address, uint16> = [];
     var minters: map<uint16, address> = [];
+    var slots: map<uint16, uint16> = [];
     var count = 0;
     val n = self.assetsCount as int;
     var i = 0;
     while (i < n) {
         val a = self.assets.mustGet(i as uint16);
         if (a.walletPending()) {
-            if (seen.addIfNotExists(a.addr, true)) {
+            val r = seen.get(a.addr);
+            if (r.isFound) {
+                val k = r.loadValue();
+                slots.set(k, (slots.mustGet(k) + 1) as uint16);
+            } else {
+                seen.set(a.addr, count as uint16);
                 minters.set(count as uint16, a.addr);
+                slots.set(count as uint16, 1);
                 count += 1;
             }
         }
         i += 1;
     }
-    return DiscoveryPlan { minters, count };
+    return DiscoveryPlan { minters, slots, count };
 }
 
-// Value of one provide_wallet_address. A flat PROVIDE_WALLET_VALUE (0.02 TON)
-// only covers the TakeWalletAddress response while a minter owns a handful of
-// assets: handleTakeWalletAddress scans all n assets and calls `.set()` on
-// every slot of that minter, so its cost grows with how many assets belong to
-// it. At total=100 with a single minter this measures ~597,000 gas, while
-// 0.02 TON buys only ~293,000: the cascade then dies with exit_code=-14 ("Out
-// of gas") on the minter's response. Each provide therefore carries a gas
-// reserve of TAKE_WALLET_GAS_UNITS_PER_ASSET × n (the units+calculateGasFee
-// scheme, see storage.tolk), covering the worst case (the minter owns all n
-// assets).
-fun Storage.provideValue(self): coins {
+// Value of one provide_wallet_address to a minter with `slots` pending slots:
+// the request plus the gas of its answer — a walk of the whole registry and,
+// for each of its slots, the most expensive write (a provisional deposit
+// undone). See TAKE_SCAN_BASE_UNITS in storage.tolk.
+fun Storage.provideValueFor(self, slots: int): coins {
+    val n = self.assetsCount as int;
     return PROVIDE_WALLET_VALUE +
-        calculateGasFee(BASECHAIN, TAKE_WALLET_GAS_UNITS_PER_ASSET * (self.assetsCount as int));
+        calculateGasFee(
+            BASECHAIN,
+            TAKE_SCAN_BASE_UNITS + TAKE_SCAN_UNITS_PER_ENTRY * n + TAKE_SET_UNITS * slots,
+        );
 }
 
 // Everything a discovery round spends: the provides and the registry scan
@@ -852,19 +859,26 @@ fun Storage.provideValue(self): coins {
 // (deployEscrow, discoveryValue) byte for byte.
 fun Storage.discoveryCost(self, plan: DiscoveryPlan): coins {
     val n = self.assetsCount as int;
-    return self.provideValue() * plan.count +
-        calculateGasFee(BASECHAIN, DEPLOY_BASE_GAS_UNITS + DEPLOY_GAS_UNITS_PER_ASSET * n);
+    var total = calculateGasFee(
+        BASECHAIN,
+        DEPLOY_BASE_GAS_UNITS + DEPLOY_GAS_UNITS_PER_ASSET * n,
+    );
+    var k = 0;
+    while (k < plan.count) {
+        total += self.provideValueFor(plan.slots.mustGet(k as uint16));
+        k += 1;
+    }
+    return total;
 }
 
 // The provides go out in mode 0: their forwarding fees come out of their own
 // value, not the balance.
 fun Storage.sendProvides(self, plan: DiscoveryPlan) {
-    val value = self.provideValue();
     var k = 0;
     while (k < plan.count) {
         val m = createMessage({
             bounce: BounceMode.Only256BitsOfBody,
-            value,
+            value: self.provideValueFor(plan.slots.mustGet(k as uint16)),
             dest: plan.minters.mustGet(k as uint16),
             body: ProvideWalletAddress {
                 queryId: k,
@@ -882,10 +896,22 @@ fun Storage.sendProvides(self, plan: DiscoveryPlan) {
 // (TEP-89) goes to every unique minter with a pending slot. A repeat while in
 // SETUP is a legal retry for a minter that did not answer: it asks only the
 // minters still pending. The sender is not gated; the caller pays for
-// everything the call spends (discoveryCost), checked before any send.
-fun handleDeployFee(_sender: address, value: coins) {
-    val st = Storage.load();
+// everything the call spends (discoveryCost), checked before any send. An
+// owner's deploy_fee is that owner's payment; a stranger's is a gift that the
+// settlement shares equally.
+fun handleDeployFee(sender: address, value: coins) {
+    var st = Storage.load();
     assert (st.phase == PHASE_ACTIVE || st.phase == PHASE_SETUP) throw Errors.AlreadyFinalized;
+    if (sender == st.owner1 || sender == st.owner2) {
+        var g = st.grams.load();
+        if (sender == st.owner1) {
+            g.gram1DepositReserve += value;
+        } else {
+            g.gram2DepositReserve += value;
+        }
+        st.grams = g.toCell();
+        st.save();
+    }
     if (st.phase != PHASE_SETUP) {
         return; // NFT-only deal: no action needed
     }

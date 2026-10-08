@@ -13,6 +13,7 @@ import "@stdlib/gas-payments"
 // under the same mapping, so a relative import by file name without an
 // extension works).
 import "@acton/build"
+import "@acton/emulation/config"
 import "@acton/emulation/network"
 import "@acton/emulation/testing"
 import "@acton/testing/expect"
@@ -231,32 +232,55 @@ fun buildInitialStorage(cfg: EscrowConfig): Storage {
 // value (Errors.InsufficientBalance, escrow_nosup_beta_v1.tolk) — the assert below is
 // `toHaveSuccessfulDeploy` (deploy: true AND success: true), so any caller
 // must attach enough value for the deploy to actually succeed.
+// Slots per unique jetton minter of a registry (any key per minter): what
+// discoveryValue needs for a deal whose wallets are all unknown.
+fun pendingSlotsByMinter(st: Storage): map<uint16, uint16> {
+    var seen: map<address, uint16> = [];
+    var slots: map<uint16, uint16> = [];
+    var count = 0;
+    var r = st.assets.findFirst();
+    while (r.isFound) {
+        val a = r.loadValue();
+        if (a.kind == 1) {
+            val f = seen.get(a.addr);
+            if (f.isFound) {
+                val k = f.loadValue();
+                slots.set(k, (slots.mustGet(k) + 1) as uint16);
+            } else {
+                seen.set(a.addr, count as uint16);
+                slots.set(count as uint16, 1);
+                count += 1;
+            }
+        }
+        r = st.assets.iterateNext(r);
+    }
+    return slots;
+}
+
+// The deploy is sent by a stranger, not by `deployer`: an owner's deploy_fee
+// counts as that owner's payment, and the tests built on this fixture keep
+// the deploy value unattributed (shared equally), as their expectations
+// assume. `deployer` is kept so callers read as before.
 fun deployEscrow(deployer: Treasury, cfg: EscrowConfig): EscrowFixture {
-    // 0.05 + (0.02 + take-wallet reserve) × unique minters (TEP-89
-    // requests from handleDeployFee) + a gas reserve for the n-scan of
-    // assetsCount. Both handleDeployFee and the minter's TakeWalletAddress
-    // response scan the whole registry, so both parts of the value scale with
-    // total assetsCount, not just with the number of minters. calculateGasFee/
-    // DEPLOY_GAS_UNITS_PER_ASSET/TAKE_WALLET_GAS_UNITS_PER_ASSET — see
-    // contracts/nosup/storage.tolk; the PROVIDE_WALLET_VALUE part must match, byte
-    // for byte, the value that handleDeployFee actually attaches to each
-    // ProvideWalletAddress — otherwise deployValue here would diverge from
-    // the contract (documented trade-off: a margin of ~1.51× instead of ≥2× —
-    // the hard 1_000_000 gas compute ceiling physically allows no larger
-    // margin at total=100).
+    // 0.05 + the per-entry part of the registry scan + one provide per
+    // unique minter, priced by its slots as handleDeployFee prices it. The
+    // scan's fixed part (DEPLOY_BASE_GAS_UNITS) is inside the 0.05. A deal
+    // without jettons gets exactly 0.05 + the per-entry scan, so its money
+    // figures do not depend on the provide pricing.
     val st = buildInitialStorage(cfg);
     val escrow = SwapEscrowNosup.fromStorage(st);
-    val perMinterProvideValue = PROVIDE_WALLET_VALUE +
-        calculateGasFee(BASECHAIN, TAKE_WALLET_GAS_UNITS_PER_ASSET * (st.assetsCount as int));
-    val deployValue = ton("0.05") + perMinterProvideValue * (st.pendingWallets as int) +
-        calculateGasFee(BASECHAIN, DEPLOY_GAS_UNITS_PER_ASSET * (st.assetsCount as int));
+    val n = st.assetsCount as int;
+    val provides = discoveryValue(n, pendingSlotsByMinter(st)) -
+        calculateGasFee(BASECHAIN, DEPLOY_BASE_GAS_UNITS + DEPLOY_GAS_UNITS_PER_ASSET * n);
+    val deployValue = ton("0.05") + provides +
+        calculateGasFee(BASECHAIN, DEPLOY_GAS_UNITS_PER_ASSET * n);
     val deployMessage = createMessage({
         bounce: BounceMode.NoBounce,
         value: deployValue,
         dest: { stateInit: escrow.stateInit! },
         body: textBody("deploy_fee"),
     });
-    val res = net.send(deployer.address, deployMessage);
+    val res = net.send(testing.treasury("escrow-deployer").address, deployMessage);
     expect(res).toHaveSuccessfulDeploy({ to: escrow.address });
     return escrow;
 }
@@ -1273,7 +1297,11 @@ fun discoveryValue(n: int, slots: map<uint16, uint16>): coins {
     var r = slots.findFirst();
     while (r.isFound) {
         total += PROVIDE_WALLET_VALUE +
-            calculateGasFee(BASECHAIN, TAKE_WALLET_GAS_UNITS_PER_ASSET * n);
+            calculateGasFee(
+                BASECHAIN,
+                TAKE_SCAN_BASE_UNITS + TAKE_SCAN_UNITS_PER_ENTRY * n +
+                    TAKE_SET_UNITS * (r.loadValue() as int),
+            );
         r = slots.iterateNext(r);
     }
     return total;
@@ -1426,6 +1454,19 @@ fun payShortfalls(escrow: EscrowFixture, o1: Treasury, o2: Treasury) {
     if (s1 > 0) {
         escrow.sendText(o1.address, "deposit_ton1", s1 + ton("0.001"));
     }
+}
+
+// Scale the basechain gas price by num/den; returns the previous config so
+// the caller can restore it.
+fun scaleGasPrice(num: int, den: int): BlockchainConfigMap {
+    val original = testing.getConfig();
+    var cfg = testing.getConfig();
+    var gp = cfg.getGasPrices(BASECHAIN);
+    gp.flatGasPrice = (gp.flatGasPrice * num / den) as uint64;
+    gp.other.gasPrice = (gp.other.gasPrice * num / den) as uint64;
+    cfg.setGasPrices(gp, BASECHAIN);
+    expect(testing.setConfig(cfg)).toEqual(true);
+    return original;
 }
 
 // claim_asset from `from` for registry index `idx`, carrying `value`.

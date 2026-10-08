@@ -12,19 +12,6 @@ import "@wrappers/SwapEscrowNosup.gen"
 import "@contracts/nosup/storage"
 import "nosup_helpers"
 
-// Multiplies the basechain gas price by num/den and returns the previous
-// config, which the caller restores with testing.setConfig.
-fun scaleGasPrice(num: int, den: int): BlockchainConfigMap {
-    val original = testing.getConfig();
-    var cfg = testing.getConfig();
-    var gp = cfg.getGasPrices(BASECHAIN);
-    gp.flatGasPrice = (gp.flatGasPrice * num / den) as uint64;
-    gp.other.gasPrice = (gp.other.gasPrice * num / den) as uint64;
-    cfg.setGasPrices(gp, BASECHAIN);
-    expect(testing.setConfig(cfg)).toEqual(true);
-    return original;
-}
-
 fun sparseCancelCompletesAt(tag: string, num: int, den: int) {
     val f = deploySparseCancelMidState(tag, 2000, 50);
     val saved = scaleGasPrice(num, den);

@@ -90,7 +90,9 @@ fun liftSide2To(tag: string, escrow: EscrowFixture, target: coins) {
     val left = side2Short(escrow);
     expect(left > 0).toEqual(true);
     val lost = short * 2 - (short - left) * 2;
-    strangerInflow(tagged(tag, "-b"), escrow.address, left * 2 + target * 2 + lost);
+    // +2 nanoton: an inflow is halved, so an odd remainder would otherwise
+    // leave side 2 one nanoton short.
+    strangerInflow(tagged(tag, "-b"), escrow.address, left * 2 + target * 2 + lost + 2);
     // nobody is short any more
     expect(side2Short(escrow)).toEqual(0);
 }

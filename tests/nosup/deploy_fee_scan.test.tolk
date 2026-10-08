@@ -54,7 +54,11 @@ fun silentMinterDeal(tag: string, nfts: int): SilentMinterDeal {
 }
 
 fun providesOnly(n: int): coins {
-    return PROVIDE_WALLET_VALUE + calculateGasFee(BASECHAIN, TAKE_WALLET_GAS_UNITS_PER_ASSET * n);
+    return PROVIDE_WALLET_VALUE +
+        calculateGasFee(
+            BASECHAIN,
+            TAKE_SCAN_BASE_UNITS + TAKE_SCAN_UNITS_PER_ENTRY * n + TAKE_SET_UNITS,
+        );
 }
 
 fun providesAndScan(n: int): coins {

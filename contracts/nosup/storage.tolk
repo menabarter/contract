@@ -88,30 +88,18 @@ const DEPLOY_GAS_UNITS_PER_ASSET = 3000
 // 3,000; 15,000 leaves ~2.8x over the remaining 5,406.
 const DEPLOY_BASE_GAS_UNITS = 15000
 
-// The same scaling problem recurs one level deeper in the cascade (deploy ->
-// ProvideWalletAddress -> TakeWalletAddress), and it is the one that bites
-// first: a 100-asset deal owned by a single minter fails in the minter's
-// TakeWalletAddress response, not in handleDeployFee.
-// handleTakeWalletAddress (below in this file) scans all n assets and calls
-// `.set()` on EVERY match — legitimate work, it resolves jettonWallet — but a
-// flat PROVIDE_WALLET_VALUE does not scale with how many assets belong to the
-// queried minter.
-// Measured, isolated call, one minter owning every asset (worst case):
-// total=10 -> 46422 gas, total=40 -> 214172 gas, total=100 -> 597172 gas.
-// Growth is slightly faster than linear: each `.set()` gets pricier as the
-// dictionary tree deepens.
-// A full 2× margin over the 100-total figure (597172×2 = 1194344) is
-// physically unreachable — it is ABOVE the hard compute ceiling for an
-// ordinary transaction (1,000,000 gas, GasPricesExtended.gasLimit, see
-// .acton/emulation/config.tolk), and no attached value can buy more than that
-// ceiling. Rather than claim a margin that cannot exist, this takes the
-// largest safe headroom UNDER the ceiling: 9000 gas/asset, which at total=100
-// means 900,000 gas — margin ≈1.51× over the measured 597172, leaving 100,000
-// gas below the hard ceiling.
-// 9000 is not a fresh guess: it is the same per-`.set()` cost measured for
-// Storage.executeSwapSingleTx in escrow_nosup_beta_v1.tolk. Applied in handleDeployFee to
-// the value of each ProvideWalletAddress, on top of PROVIDE_WALLET_VALUE.
-const TAKE_WALLET_GAS_UNITS_PER_ASSET = 9000
+// Gas of the minter's take_wallet_address answer, priced per minter by the
+// number of its slots k (handleTakeWalletAddress): a walk over all n registry
+// entries plus a write for each of the minter's k slots. Measured on Tolk
+// 1.5 with one minter M and the rest of the registry owned by another:
+// walk (k = 1) n=10 -> 16,905, n=40 -> 45,665, n=100 -> 103,210 gas, so
+// about 7,315 + 959 per entry; the write per slot, in the worst case where
+// every slot of M holds a provisional deposit the answer undoes, is
+// 3,742 / 4,898 / 5,604 gas at k = n = 10 / 40 / 100 (it grows with the
+// dictionary's depth). Each constant is about 1.5x its measurement.
+const TAKE_SCAN_BASE_UNITS = 11000
+const TAKE_SCAN_UNITS_PER_ENTRY = 1500
+const TAKE_SET_UNITS = 8500
 
 // Error codes. The numeric values are part of the wire contract — integrators
 // match on them — so they are pinned by tests and must not be renumbered.

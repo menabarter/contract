@@ -248,8 +248,8 @@ get fun `test gas probe: asym 256x1`() {
 // scans all n assets and does a `.set()` on each match to record
 // jettonWallet, so the value of each ProvideWalletAddress carries
 // PROVIDE_WALLET_VALUE +
-// calculateGasFee(BASECHAIN, TAKE_WALLET_GAS_UNITS_PER_ASSET × assetsCount)
-// (see TAKE_WALLET_GAS_UNITS_PER_ASSET, storage.tolk).
+// calculateGasFee(BASECHAIN, TAKE_SCAN_BASE_UNITS + TAKE_SCAN_UNITS_PER_ENTRY ×
+// assetsCount + TAKE_SET_UNITS × the minter's slots) (see storage.tolk).
 //
 // BOUNDARY — a genuine compute ceiling in handleTakeWalletAddress (1,000,000
 // gas per ordinary transaction, GasPricesExtended.gasLimit), not a value
