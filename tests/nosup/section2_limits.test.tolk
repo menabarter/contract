@@ -88,6 +88,27 @@ get fun `test one claim above the edge AcceptDeal only credits`() {
     expect(d.escrow.gramState().serviceFee2).toEqual(SERVICE_FEE);
 }
 
+// AcceptDeal pays its own walks and claim writes out of the value it carries:
+// at exactly the discovery price (which prices only deploy_fee's single scan)
+// it must still succeed — credit, write the claims — and simply not start
+// discovery, rather than abort its action phase on a fresh, empty balance.
+get fun `test AcceptDeal at exactly the discovery price never aborts`() {
+    val d = wideDeal("sl7", 0x760600, 0, 40);
+    var s: map<uint16, uint16> = [];
+    s.set(0, 40);
+    val res = sendAcceptDeal(d.o2.address, d.escrow, d.claims, discoveryValue(40, s), true);
+    expect(res).toHaveAllSuccessfulTxs();
+    expect(d.escrow.jettonWalletStatus(0)).toEqual((jwAddr(d.minter, d.escrow.address), false));
+    expect(d.escrow.pendingWalletsLeft()).toEqual(1);
+    expect(d.escrow.gramState().serviceFee2 > 0).toEqual(true);
+    // with its own gas on top, discovery starts and the minter confirms
+    val d2 = wideDeal("sl8", 0x760700, 0, 40);
+    expect(
+        sendAcceptDeal(d2.o2.address, d2.escrow, d2.claims, acceptDiscoveryValue(40, 40, s), true),
+    ).toHaveAllSuccessfulTxs();
+    expect(d2.escrow.pendingWalletsLeft()).toEqual(0);
+}
+
 // The bound is by modelled gas, not by registry size: many NFTs and a few
 // jettons still get their claims.
 get fun `test a large NFT registry with few jettons keeps its claims`() {

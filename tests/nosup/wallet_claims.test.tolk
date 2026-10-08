@@ -4,6 +4,7 @@
 // Jetton wallet discovery with claims: side 2 claims the escrow's wallet
 // addresses in AcceptDeal, a deposit from a claimed address is recorded
 // provisionally, and the minter's take_wallet_address confirms or undoes it.
+import "@stdlib/gas-payments"
 import "@acton/emulation/network"
 import "@acton/emulation/testing"
 import "@acton/testing/expect"
@@ -197,7 +198,13 @@ get fun `test a second AcceptDeal keeps the first claims`() {
     var other: map<address, address> = [];
     other.set(d.m1, testing.treasury("wc10-w").address);
     expect(
-        sendAcceptDeal(d.o2.address, d.escrow, other, d.discovery(), false),
+        sendAcceptDeal(
+            d.o2.address,
+            d.escrow,
+            other,
+            d.discovery() + calculateGasFee(BASECHAIN, acceptModel(4, 2)),
+            false,
+        ),
     ).toHaveAllSuccessfulTxs();
     expect(d.escrow.jettonWalletStatus(2)).toEqual((jwAddr(d.m1, d.escrow.address), true));
     expect(d.escrow.phase()).toEqual(PHASE_ACTIVE);

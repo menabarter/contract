@@ -971,10 +971,15 @@ fun handleAcceptDeal(sender: address, value: coins, msg: AcceptDeal) {
         // message's gas only credits: a failed AcceptDeal would bounce side
         // 2's payment while the batch's transfers still arrive. deploy_fee
         // starts discovery for it.
-        if (st.acceptWorkUnits() <= TX_GAS_LIMIT_CEILING) {
+        val work = st.acceptWorkUnits();
+        if (work <= TX_GAS_LIMIT_CEILING) {
             st.writeClaims(msg.claims);
             val plan = st.planDiscovery();
-            if (value >= st.discoveryCost(plan)) {
+            // The value pays this message's own walks and writes too: on a
+            // fresh deploy the balance is only this value, so the provides go
+            // out only if it covers them after that gas, or the action phase
+            // would fail and bounce the whole message.
+            if (value >= st.discoveryCost(plan) + calculateGasFee(BASECHAIN, work)) {
                 st.sendProvides(plan);
             }
         }

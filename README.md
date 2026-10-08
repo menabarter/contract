@@ -331,9 +331,11 @@ sends elsewhere stay unrecorded, and on cancel a return to the false address
 is side 2's own transfer cost). Without claims the flow is the two-step one:
 a jetton that arrives before its minter answered is returned.
 
-`AcceptDeal` starts discovery only when its value covers it (the same price as
-`deploy_fee`); below that it is still accepted — the escrow is deployed and
-the value credited — and `deploy_fee` starts discovery later. An owner's
+`AcceptDeal` starts discovery only when its value covers it: the same price
+as `deploy_fee`, plus the gas of `AcceptDeal`'s own claim and discovery
+passes (`calculateGasFee(17,000 + 2,500 × entries + 8,000 × jetton slots)`);
+below that it is still accepted — the escrow is deployed and the value
+credited — and `deploy_fee` starts discovery later. An owner's
 `deploy_fee` counts as that owner's payment; a stranger's is shared equally.
 Discovery is priced per minter: `PROVIDE_WALLET_VALUE` plus the gas of the
 minter's answer, `TAKE_SCAN_BASE_UNITS + TAKE_SCAN_UNITS_PER_ENTRY × entries +
@@ -353,8 +355,10 @@ What a client must do:
   escrow that does not exist yet are lost (an undeployed address cannot
   record a notification). A first message that fails in its handler still
   deploys the account, so this concerns only a message that never arrives;
-- attach to `AcceptDeal` at least `calculateGasFee(1,000,000)` (about 0.067
-  TON today, below the service fee it carries anyway);
+- attach to `AcceptDeal` the service fee, the TON leg and the discovery price
+  with its own gas above; whatever it carries, never less than
+  `calculateGasFee(1,000,000)` (about 0.067 TON at today's gas price), the
+  most its handler can use;
 - respect the wallet's `maxMessages`: a v4 wallet fits `AcceptDeal` plus three
   assets; v5 fits up to 255 messages;
 - let owner1 deposit jettons only after `pendingWalletsLeft()` reaches 0;
@@ -365,9 +369,9 @@ Limits (measured; the contract enforces the first, the client the others):
 
 | | Limit |
 |---|---|
-| Claims written by `AcceptDeal` | while `17,000 + 2,500 × entries + 8,000 × jetton slots ≤ 1,000,000` gas units (up to 94 claimed slots in a jetton-only deal); above it `AcceptDeal` only credits and the deal takes the two-step path |
+| Claims written by `AcceptDeal` | while `17,000 + 2,500 × entries + 8,000 × jetton slots ≤ 1,000,000` gas units (up to 93 claimed slots in a jetton-only deal); above it `AcceptDeal` only credits and the deal takes the two-step path |
 | Slots of one minter (`TAKE_MAX_SLOTS`) | 120 — above it the minter's answer may not fit one transaction and the deal may never leave SETUP |
-| Deal executed by the last answer (`ONE_SIGNATURE_MAX_ASSETS`) | 80 — above it the answer leaves the deal ACTIVE and `execute_swap` settles it |
+| Deal executed by the last answer (`ONE_SIGNATURE_MAX_ASSETS`) | 80 is certain; within the claim limit even the heaviest deal measured executes in the answer. An answer that ever ran out would leave the deal ACTIVE for `execute_swap` |
 
 #### Risks this variant does not remove
 
@@ -632,7 +636,7 @@ To check the deployed contract, build this source with Acton 1.2.0.
 The compiled code hash of `SwapEscrowNosup` with the current toolchain is:
 
 ```
-7CB8C52B9B9DEF249BCEA11E233A2510383B0A051AB588536DB03F6A67BC7C1B
+7E0F567AB6B41C58F9B9E8F91355446C3DA9E13DEA56ED344E51A87612F0AAED
 ```
 
 Run `acton build` and compare against `build/SwapEscrow.json` and

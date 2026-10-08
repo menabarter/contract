@@ -1475,6 +1475,12 @@ fun acceptModel(n: int, jettons: int): int {
     return ACCEPT_BASE_UNITS + ACCEPT_UNITS_PER_ENTRY * n + ACCEPT_UNITS_PER_CLAIM * jettons;
 }
 
+// What AcceptDeal must carry to start discovery itself: the discovery price
+// plus the gas of its own claim and discovery passes (the contract's model).
+fun acceptDiscoveryValue(n: int, jettons: int, slots: map<uint16, uint16>): coins {
+    return discoveryValue(n, slots) + calculateGasFee(BASECHAIN, acceptModel(n, jettons));
+}
+
 // The most claimed slots a jetton-only registry may have for AcceptDeal to
 // write them.
 fun largestClaimedRegistry(): int {
