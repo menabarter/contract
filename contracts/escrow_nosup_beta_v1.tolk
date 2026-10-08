@@ -727,6 +727,20 @@ fun Storage.tryAutoExecute(mutate self, committedOut: coins) {
     }
 }
 
+// Auto-execution from a transaction that has already done other work (the
+// minter's answer walks the whole registry). That work counts against the gas
+// limit too, so the limit is execution's own units on top of what is already
+// used, up to the transaction ceiling. If execution still runs out, the caller
+// has committed its state and execute_swap settles the deal. Large deals run
+// as a batch chain that stops itself by consumed gas (runDistributionBatch).
+fun Storage.tryAutoExecuteAfterWalk(mutate self) {
+    if (self.canAutoExecute(0)) {
+        val units = getGasConsumedAtTheMoment() + self.executionGasUnits(self.grams.load());
+        setGasLimit(units < TX_GAS_LIMIT_CEILING ? units : TX_GAS_LIMIT_CEILING);
+        self.executeSwap(0);
+    }
+}
+
 // Fallback for a message with an empty body: from an owner it is treated as
 // an ordinary GRAM deposit for that side; from anyone else it is forwarded to
 // feeWallet, since there is no reason to hold a stranger's TON on the escrow's
@@ -989,8 +1003,13 @@ fun handleTakeWalletAddress(sender: address, _value: coins, msg: TakeWalletAddre
     if (st.pendingWallets == 0) {
         st.phase = PHASE_ACTIVE;
         // With claims every deposit may already be in when the last minter
-        // answers: this answer then completes the deal.
-        st.tryAutoExecute(0);
+        // answers: this answer then completes the deal. The answer is
+        // recorded before execution: this transaction has already walked the
+        // registry, so execution may run out of gas here, and the minter's
+        // answer must not be lost with it.
+        st.save();
+        commitContractDataAndActions();
+        st.tryAutoExecuteAfterWalk();
     }
     st.save();
 }

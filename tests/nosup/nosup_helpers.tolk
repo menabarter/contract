@@ -17,6 +17,7 @@ import "@acton/emulation/network"
 import "@acton/emulation/testing"
 import "@acton/testing/expect"
 import "@acton/tolk-stdlib/strings"
+import "@acton/types/big_array"
 import "@acton/types/transaction"
 import "@contracts/jetton_minter_mock"
 import "@contracts/jetton_mock_lib"
@@ -1399,6 +1400,32 @@ fun fakeNotification(
             },
         }),
     );
+}
+
+// Gas of the heaviest transaction `who` ran in this trace.
+fun maxGasOn(res: SendResultList, who: address): int {
+    var m = 0;
+    var i = 0;
+    while (i < res.size()) {
+        val r = res.at(i);
+        if (r.tx.load().getAccountAddress() == who && r.gasUsed > m) {
+            m = r.gasUsed;
+        }
+        i += 1;
+    }
+    return m;
+}
+
+// Each side pays what executionShortfall names, plus 0.001 TON for the first
+// payment's own gas (the getter's documented margin); side 2 first.
+fun payShortfalls(escrow: EscrowFixture, o1: Treasury, o2: Treasury) {
+    val (s1, s2) = escrow.executionShortfall();
+    if (s2 > 0) {
+        escrow.sendText(o2.address, "deposit_ton2", s2 + ton("0.001"));
+    }
+    if (s1 > 0) {
+        escrow.sendText(o1.address, "deposit_ton1", s1 + ton("0.001"));
+    }
 }
 
 // claim_asset from `from` for registry index `idx`, carrying `value`.
