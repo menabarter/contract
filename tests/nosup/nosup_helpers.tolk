@@ -1469,6 +1469,21 @@ fun scaleGasPrice(num: int, den: int): BlockchainConfigMap {
     return original;
 }
 
+// The contract's model of AcceptDeal's gas (Storage.acceptWorkUnits).
+fun acceptModel(n: int, jettons: int): int {
+    return ACCEPT_BASE_UNITS + ACCEPT_UNITS_PER_ENTRY * n + ACCEPT_UNITS_PER_CLAIM * jettons;
+}
+
+// The most claimed slots a jetton-only registry may have for AcceptDeal to
+// write them.
+fun largestClaimedRegistry(): int {
+    var j = 1;
+    while (acceptModel(j + 1, j + 1) <= TX_GAS_LIMIT_CEILING) {
+        j += 1;
+    }
+    return j;
+}
+
 // claim_asset from `from` for registry index `idx`, carrying `value`.
 fun sendClaim(from: address, escrow: address, idx: int, value: coins): SendResultList {
     val m = createMessage({

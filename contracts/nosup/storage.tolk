@@ -101,6 +101,40 @@ const TAKE_SCAN_BASE_UNITS = 11000
 const TAKE_SCAN_UNITS_PER_ENTRY = 1500
 const TAKE_SET_UNITS = 8500
 
+// Gas model of AcceptDeal's claim and discovery passes: a walk over every
+// registry entry (twice: claims, then the discovery plan) and a dictionary
+// write per claimed slot, bounded by jettonsCount. AcceptDeal writes claims and
+// starts discovery only while the model stays within TX_GAS_LIMIT_CEILING;
+// above it the message only credits side 2, so it never runs out of gas on a
+// large registry. Measured on Tolk 1.5 (AcceptDeal below the discovery price,
+// j claimed slots of one minter plus n - j dummy entries): (n, j) = (1, 1)
+// 14,142; (101, 1) 206,142; (301, 1) 611,817; (40, 40) 313,525; (80, 80)
+// 662,680 gas — about 14,100 + 1,920..1,992 per entry + 6,200 per claim
+// (both grow with the dictionary's depth). Each constant is about 1.2x its
+// measurement, so a deal the model admits uses at most about 1/1.2 of the
+// ceiling (a jetton-only registry of up to 94 claimed slots).
+const ACCEPT_BASE_UNITS = 17000
+const ACCEPT_UNITS_PER_ENTRY = 2500
+const ACCEPT_UNITS_PER_CLAIM = 8000
+
+// Limits the deploying side (the dapp) enforces; the contract does not read
+// them.
+// TAKE_MAX_SLOTS: slots of one minter whose answer still fits the
+// transaction ceiling with a 1.2x margin. At this size AcceptDeal writes no
+// claims (the ACCEPT_* model admits at most 94), so the answer only records
+// the wallet: 120 -> 741,610, 140 -> 925,750, 160 -> out of gas. The heaviest
+// answer with claims (every claimed slot undone) is pinned at the model's
+// edge in tests/nosup/section2_limits. Above TAKE_MAX_SLOTS the deal may never
+// leave SETUP (it stays cancellable).
+const TAKE_MAX_SLOTS = 120
+// ONE_SIGNATURE_MAX_ASSETS: the largest registry for which the last minter
+// answer also executes the deal in its own transaction, measured on the
+// harshest shape (every slot a jetton of one minter): 40, 60, 80, 90 slots
+// execute (answer and execution 385,356 / 578,126 / 793,671 / 893,881 gas),
+// 100 runs out; 90 less 10%. Above it the answer keeps the deal ACTIVE and
+// execute_swap settles it.
+const ONE_SIGNATURE_MAX_ASSETS = 80
+
 // Error codes. The numeric values are part of the wire contract — integrators
 // match on them — so they are pinned by tests and must not be renumbered.
 enum Errors {

@@ -920,6 +920,13 @@ fun handleDeployFee(sender: address, value: coins) {
     st.sendProvides(plan);
 }
 
+// Modelled gas of AcceptDeal's claim and discovery passes (see
+// ACCEPT_BASE_UNITS): every entry walked, every jetton slot possibly claimed.
+fun Storage.acceptWorkUnits(self): int {
+    return ACCEPT_BASE_UNITS + ACCEPT_UNITS_PER_ENTRY * (self.assetsCount as int) +
+        ACCEPT_UNITS_PER_CLAIM * (self.jettonsCount as int);
+}
+
 // Side 2's claimed wallets go into its jetton slots that have none yet. A
 // claim only lets a deposit be recorded before the minter answers; the
 // answer confirms or undoes it (handleTakeWalletAddress). Side 1's slots, and
@@ -960,10 +967,16 @@ fun handleAcceptDeal(sender: address, value: coins, msg: AcceptDeal) {
     g.creditSide2(value);
     st.grams = g.toCell();
     if (st.phase == PHASE_SETUP) {
-        st.writeClaims(msg.claims);
-        val plan = st.planDiscovery();
-        if (value >= st.discoveryCost(plan)) {
-            st.sendProvides(plan);
+        // A registry whose claim and discovery passes could exhaust this
+        // message's gas only credits: a failed AcceptDeal would bounce side
+        // 2's payment while the batch's transfers still arrive. deploy_fee
+        // starts discovery for it.
+        if (st.acceptWorkUnits() <= TX_GAS_LIMIT_CEILING) {
+            st.writeClaims(msg.claims);
+            val plan = st.planDiscovery();
+            if (value >= st.discoveryCost(plan)) {
+                st.sendProvides(plan);
+            }
         }
         st.save();
         return;

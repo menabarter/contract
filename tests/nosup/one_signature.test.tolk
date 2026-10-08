@@ -51,11 +51,13 @@ get fun `test the last minter answer executes the deal`() {
     expect(d.escrow.phase()).toEqual(PHASE_DONE);
 }
 
-// One minter owning 100 side 2 slots, all deposited provisionally: the
-// answer walks and rewrites 100 slots, then execution sends 100 jettons. If
-// the transaction runs out of gas, the answer and ACTIVE must survive and
-// execute_swap settles the deal.
-get fun `test an answer that cannot also execute keeps ACTIVE`() {
+// One minter owning the largest registry AcceptDeal still claims, every slot
+// deposited provisionally: the answer walks and rewrites every slot, then
+// execution sends every jetton. If the transaction runs out of gas, the
+// answer and ACTIVE must survive and execute_swap settles the deal; either
+// way the deal ends DONE.
+get fun `test an answer at the claim limit always settles the deal`() {
+    val n = largestClaimedRegistry();
     val o1 = testing.treasury("os2-o1");
     val o2 = testing.treasury("os2-o2");
     val fw = testing.treasury("os2-fw");
@@ -64,7 +66,7 @@ get fun `test an answer that cannot also execute keeps ACTIVE`() {
     var cfg = makeBasicConfig(o1, o2, fw);
     var js: map<uint16, JettonCfg> = [];
     var i = 0;
-    while (i < 100) {
+    while (i < n) {
         js.set(
             i as uint16,
             JettonCfg {
@@ -76,13 +78,13 @@ get fun `test an answer that cannot also execute keeps ACTIVE`() {
         i += 1;
     }
     cfg.jettons = js;
-    cfg.jettonsCount = 100;
+    cfg.jettonsCount = n;
     val escrow = prepareEscrow(cfg);
     var c: map<address, address> = [];
     c.set(m, jwAddr(m, escrow.address));
     var s: map<uint16, uint16> = [];
-    s.set(0, 100);
-    val price = discoveryValue(100, s);
+    s.set(0, n as uint16);
+    val price = discoveryValue(n, s);
     expect(sendAcceptDeal(o2.address, escrow, c, price - 1, true)).toHaveAllSuccessfulTxs();
     expect(escrow.pendingWalletsLeft()).toEqual(1);
     expect(escrow.sendText(o2.address, "service_fee_owner2", SERVICE_FEE)).toHaveAllSuccessfulTxs();
