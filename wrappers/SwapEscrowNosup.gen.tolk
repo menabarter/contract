@@ -70,11 +70,11 @@ fun SwapEscrowNosup.sendOwnershipAssigned(
     return net.send(from, genericMsg);
 }
 
-fun SwapEscrowNosup.sendTakeWalletAddress(
+fun SwapEscrowNosup.sendTakeWalletAddressNosup(
     self,
     from: address,
     queryId: uint64,
-    walletAddress: address,
+    walletAddress: address?,
     rest: RemainingBitsAndRefs,
     config: SendParams = {},
 ): SendResultList {
@@ -82,7 +82,7 @@ fun SwapEscrowNosup.sendTakeWalletAddress(
         bounce: config.bounce,
         value: config.value,
         dest: self.address,
-        body: TakeWalletAddress { queryId, walletAddress, rest },
+        body: TakeWalletAddressNosup { queryId, walletAddress, rest },
     });
     return net.send(from, genericMsg);
 }

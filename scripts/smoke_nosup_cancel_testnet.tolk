@@ -125,7 +125,7 @@ fun mkAsset(side: int, addr: address): Asset {
         jettonWallet: null,
         amount: 0,
         received: false,
-        sent: false,
+        walletUnverified: false,
         bounces: 0,
         claimable: false,
     };

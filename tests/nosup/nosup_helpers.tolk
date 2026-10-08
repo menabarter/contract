@@ -97,7 +97,7 @@ fun buildInitialStorage(cfg: EscrowConfig): Storage {
                 jettonWallet: null,
                 amount: 0,
                 received: false,
-                sent: false,
+                walletUnverified: false,
                 bounces: 0,
                 claimable: false,
             },
@@ -116,7 +116,7 @@ fun buildInitialStorage(cfg: EscrowConfig): Storage {
                 jettonWallet: null,
                 amount: 0,
                 received: false,
-                sent: false,
+                walletUnverified: false,
                 bounces: 0,
                 claimable: false,
             },
@@ -138,7 +138,7 @@ fun buildInitialStorage(cfg: EscrowConfig): Storage {
                 jettonWallet: null,
                 amount: jc.amount,
                 received: false,
-                sent: false,
+                walletUnverified: false,
                 bounces: 0,
                 claimable: false,
             },
@@ -1151,6 +1151,71 @@ fun setup1x1(tag: string, seed: int): Deal1x1 {
     expect(sendNftToEscrow(o1, nft1, escrow.address, ton("0.2"), 0)).toHaveAllSuccessfulTxs();
     expect(sendNftToEscrow(o2, nft2, escrow.address, ton("0.2"), 1)).toHaveAllSuccessfulTxs();
     return Deal1x1 { escrow, o1, o2, fw, nft1, nft2 };
+}
+
+// A deal with a jetton of `minter` on side 1 and one of a minter that never
+// answers on side 2: it stays in SETUP. `silentFirst` puts the silent minter's
+// slot first in the registry.
+struct SetupDeal {
+    escrow: EscrowFixture
+    o1: Treasury
+    o2: Treasury
+    minter: address
+    silent: Treasury
+}
+
+fun setupWithSilentMinter(tag: string, seed: int, silentFirst: bool): SetupDeal {
+    val o1 = testing.treasury(tagged(tag, "-o1"));
+    val o2 = testing.treasury(tagged(tag, "-o2"));
+    val fw = testing.treasury(tagged(tag, "-fw"));
+    val silent = testing.treasury(tagged(tag, "-silent"));
+    val minter = deployJettonMinter(o1, seed);
+    mintJettons(minter, o1, ton("500"));
+    var cfg = makeBasicConfig(o1, o2, fw);
+    val ours = JettonCfg {
+        minter,
+        ownerSide: 1,
+        amount: ton("100"),
+    };
+    val theirs = JettonCfg {
+        minter: silent.address,
+        ownerSide: 2,
+        amount: ton("5"),
+    };
+    var js: map<uint16, JettonCfg> = [];
+    js.set(0, silentFirst ? theirs : ours);
+    js.set(1, silentFirst ? ours : theirs);
+    cfg.jettons = js;
+    cfg.jettonsCount = 2;
+    val escrow = deployEscrow(o1, cfg);
+    expect(escrow.phase()).toEqual(PHASE_SETUP);
+    return SetupDeal { escrow, o1, o2, minter, silent };
+}
+
+// A take_wallet_address body. `wallet == null` encodes addr_none, which a
+// minter sends for an owner it does not serve (TEP-89).
+fun takeWalletBody(queryId: int, wallet: address?): cell {
+    var b = beginCell().storeUint(0xd1735400, 32).storeUint(queryId, 64);
+    if (wallet == null) {
+        b = b.storeUint(0, 2);
+    } else {
+        b = b.storeAddress(wallet!);
+    }
+    return b.storeUint(0, 1).endCell();
+}
+
+// Deliver a take_wallet_address from `minter` (any address the test can send
+// from) to `escrow`.
+fun sendTakeWallet(minter: address, escrow: address, wallet: address?): SendResultList {
+    return net.send(
+        minter,
+        createMessage({
+            bounce: BounceMode.NoBounce,
+            value: ton("0.05"),
+            dest: escrow,
+            body: takeWalletBody(0, wallet),
+        }),
+    );
 }
 
 // claim_asset from `from` for registry index `idx`, carrying `value`.

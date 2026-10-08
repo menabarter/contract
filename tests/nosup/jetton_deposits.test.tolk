@@ -469,45 +469,6 @@ fun sendJettonWithPayload(
     return net.send(owner.address, m);
 }
 
-// A deal with a jetton of `minter` on side 1 and one of a minter that never
-// answers on side 2: it stays in SETUP. `silentFirst` puts the silent minter's
-// slot first in the registry.
-struct SetupDeal {
-    escrow: EscrowFixture
-    o1: Treasury
-    o2: Treasury
-    minter: address
-    silent: Treasury
-}
-
-fun setupWithSilentMinter(tag: string, seed: int, silentFirst: bool): SetupDeal {
-    val o1 = testing.treasury(tagged(tag, "-o1"));
-    val o2 = testing.treasury(tagged(tag, "-o2"));
-    val fw = testing.treasury(tagged(tag, "-fw"));
-    val silent = testing.treasury(tagged(tag, "-silent"));
-    val minter = deployJettonMinter(o1, seed);
-    mintJettons(minter, o1, ton("500"));
-    var cfg = makeBasicConfig(o1, o2, fw);
-    val ours = JettonCfg {
-        minter,
-        ownerSide: 1,
-        amount: ton("100"),
-    };
-    val theirs = JettonCfg {
-        minter: silent.address,
-        ownerSide: 2,
-        amount: ton("5"),
-    };
-    var js: map<uint16, JettonCfg> = [];
-    js.set(0, silentFirst ? theirs : ours);
-    js.set(1, silentFirst ? ours : theirs);
-    cfg.jettons = js;
-    cfg.jettonsCount = 2;
-    val escrow = deployEscrow(o1, cfg);
-    expect(escrow.phase()).toEqual(PHASE_SETUP);
-    return SetupDeal { escrow, o1, o2, minter, silent };
-}
-
 // A minter's take_wallet_address that arrives after the deal was cancelled in
 // SETUP must be ignored: resolving the last pending minter would otherwise
 // switch the cancelled deal back to ACTIVE.

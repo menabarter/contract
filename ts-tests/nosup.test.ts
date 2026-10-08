@@ -101,7 +101,7 @@ const claimableAsset = Asset.create({
     jettonWallet: null,
     amount: 0n,
     received: true,
-    sent: false,
+    walletUnverified: false,
     bounces: 1n,
     claimable: true,
 });
@@ -124,7 +124,7 @@ const mkNft = (side: bigint, addr: Address): Asset =>
         jettonWallet: null,
         amount: 0n,
         received: false,
-        sent: false,
+        walletUnverified: false,
         bounces: 0n,
         claimable: false,
     });

@@ -14,9 +14,19 @@ struct (0x6d5f0006) ClaimAsset {
     assetIndex: uint16
 }
 
+// TEP-89 take_wallet_address. A minter answers addr_none for an owner it does
+// not serve (an address in another workchain), so the wallet is read as
+// `address?`: null is addr_none. Same opcode and layout as the shared
+// TakeWalletAddress, which reads a plain `address`.
+struct (0xd1735400) TakeWalletAddressNosup {
+    queryId: uint64
+    walletAddress: address?
+    rest: RemainingBitsAndRefs // owner_address:(Maybe ^MsgAddress) — not read
+}
+
 type EscrowNosupBinaryMessage =
     | OwnershipAssigned
-    | TakeWalletAddress
+    | TakeWalletAddressNosup
     | JettonTransferNotification
     | Excesses
     | ContinueDistribution

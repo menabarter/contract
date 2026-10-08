@@ -216,10 +216,10 @@ struct Asset {
     jettonWallet: address? // null for NFT assets
     amount: coins          // 0 for NFT assets
     received: bool
-    // Reserved: initialized to false and never assigned — delivery progress is
-    // tracked by DistState.cursor. Kept because dropping it would change the
-    // storage layout, and with it every deal address.
-    sent: bool
+    // True while `jettonWallet` holds an address side 2 claimed in AcceptDeal
+    // that the minter has not confirmed yet; the minter's take_wallet_address
+    // clears it (handleTakeWalletAddress).
+    walletUnverified: bool
     // saturating count of bounced deliveries (diagnostics)
     bounces: uint4
     // Set when an outgoing transfer of this asset bounced back to the escrow;

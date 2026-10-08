@@ -143,7 +143,7 @@ fun mkNft(side: int, addr: address): Asset {
         jettonWallet: null,
         amount: 0,
         received: false,
-        sent: false,
+        walletUnverified: false,
         bounces: 0,
         claimable: false,
     };
@@ -157,7 +157,7 @@ fun mkJetton(side: int, minter: address, amount: coins): Asset {
         jettonWallet: null,
         amount,
         received: false,
-        sent: false,
+        walletUnverified: false,
         bounces: 0,
         claimable: false,
     };

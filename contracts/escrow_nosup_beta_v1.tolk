@@ -71,7 +71,7 @@ fun onInternalMessage(in: InMessage) {
         OwnershipAssigned => {
             handleNftReceived(in.senderAddress, in.valueCoins, msg);
         }
-        TakeWalletAddress => {
+        TakeWalletAddressNosup => {
             handleTakeWalletAddress(in.senderAddress, in.valueCoins, msg);
         }
         JettonTransferNotification => {
@@ -876,8 +876,8 @@ fun handleDeployFee(_sender: address, value: coins) {
 // Idempotency: a repeat response from an already-resolved minter / a
 // response from a non-minter / a response outside SETUP is silently
 // ignored (not thrown: these are external messages, and failing them gains
-// us nothing).
-fun handleTakeWalletAddress(sender: address, _value: coins, msg: TakeWalletAddress) {
+// us nothing). An addr_none answer resolves nothing: the deal stays in SETUP.
+fun handleTakeWalletAddress(sender: address, _value: coins, msg: TakeWalletAddressNosup) {
     var st = Storage.load();
     if (st.phase != PHASE_SETUP) {
         return;
@@ -895,6 +895,12 @@ fun handleTakeWalletAddress(sender: address, _value: coins, msg: TakeWalletAddre
         i += 1;
     }
     if (!resolvedAny) {
+        return;
+    }
+    if (msg.walletAddress == null) {
+        // addr_none: the minter does not serve this escrow. Its slots stay
+        // without a wallet and the deal stays in SETUP until it is cancelled.
+        st.save();
         return;
     }
     st.pendingWallets -= 1;
@@ -1648,7 +1654,7 @@ fun handleNftReceived(sender: address, value: coins, msg: OwnershipAssigned) {
         jettonWallet: null,
         amount: 0,
         received: false,
-        sent: false,
+        walletUnverified: false,
         bounces: 0,
         claimable: false,
     };
