@@ -1946,6 +1946,12 @@ get fun canAutoExecuteNow(): bool {
 // After one side's payment has landed its figure is only its half of the
 // remaining deficit, and the other side can pay both figures together.
 // Deposits still to come add their attached value. Walks the registry.
+// The figure also keeps both settlement shares at or above zero, so each side
+// bears exactly half of what the deal spent, including the deployment and
+// wallet discovery that side 2 paid up front. It is exact when read after
+// every asset has arrived (each later deposit spends gas from the shared
+// balance), so the TON part is paid last. A side that pays both figures still
+// executes the deal; what it paid beyond its own share comes back to it.
 get fun executionShortfall(): (int, int) {
     val st = lazy Storage.load();
     val g = st.grams.load();
@@ -1975,6 +1981,16 @@ get fun executionShortfall(): (int, int) {
         s1 += half1;
         s2 += deficit - half1;
     }
+    // Both formula shares must stay at or above zero after the payments, or
+    // the side that paid more would also bear the other side's half (see
+    // noClampTopUps). R and the nets are taken as execution will compute them,
+    // with every registry asset counted at its transfer cost.
+    val r = contract.getOriginalBalance() + s1 + s2 - st.minBalanceForSwap(g);
+    val n1 = paidBy(g, 1) + s1 - g.gram1Amount - SERVICE_FEE - st.registryTransferCost(1);
+    val n2 = paidBy(g, 2) + s2 - g.gram2Amount - SERVICE_FEE - st.registryTransferCost(2);
+    val (t1, t2) = noClampTopUps(r, n1, n2);
+    s1 += t1;
+    s2 += t2;
     return (s1, s2);
 }
 

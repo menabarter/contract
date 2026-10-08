@@ -62,6 +62,19 @@ fun splitRefunds(r: coins, n1: coins, n2: coins): (coins, coins) {
     return (r1, r - r1);
 }
 
+// Top-ups that keep both formula shares at or above zero, so splitRefunds
+// never cuts one and each side bears exactly half of what was shared. Side
+// i's share is (R ± (N1 − N2)) / 2; a top-up `a` by side i raises both R and
+// Ni by a, so that share grows by a and the other share does not move. Odd
+// amounts round the top-up up.
+fun noClampTopUps(r: int, n1: int, n2: int): (coins, coins) {
+    val x1 = r + n1 - n2;
+    val x2 = r - n1 + n2;
+    val a1 = x1 < 0 ? (-x1 + 1) / 2 : 0;
+    val a2 = x2 < 0 ? (-x2 + 1) / 2 : 0;
+    return (a1, a2);
+}
+
 // Cost of moving `side`'s received assets (delivery on execute, return on
 // cancel — the same per-asset values either way), from the received counters.
 fun Storage.ownTransferCost(self, side: int): coins {

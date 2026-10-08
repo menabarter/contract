@@ -110,8 +110,10 @@ get fun `test paying the getter figures exactly falls short by the payments' own
     val cost2 = b1 + s2 - testing.getAccountBalance(p.escrow.address);
     expect(p.escrow.phase()).toEqual(PHASE_ACTIVE);
     val (u1, u2) = p.escrow.executionShortfall();
-    expect(u1 + u2).toEqual(cost1 + cost2);
-    expect(u2 - u1 >= 0 && u2 - u1 <= 1).toEqual(true);
+    // the top-ups that keep both shares non-negative round up: at most 1
+    // nanoton above the payments' gas
+    expect(u1 + u2 - (cost1 + cost2)).toBeInRange(0, 1);
+    expect(u2 - u1).toBeInRange(-1, 1);
     expect(cost1 < GETTER_PAYMENT_HEADROOM).toEqual(true);
 }
 

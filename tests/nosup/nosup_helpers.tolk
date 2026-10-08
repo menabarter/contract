@@ -19,6 +19,7 @@ import "@acton/emulation/testing"
 import "@acton/testing/expect"
 import "@acton/tolk-stdlib/strings"
 import "@acton/types/big_array"
+import "@acton/types/message"
 import "@acton/types/transaction"
 import "@contracts/jetton_minter_mock"
 import "@contracts/jetton_mock_lib"
@@ -1482,6 +1483,27 @@ fun largestClaimedRegistry(): int {
         j += 1;
     }
     return j;
+}
+
+// TON that `from` sent to `to` in this trace (the value of every message
+// `to` received from `from`).
+fun valueSentTo(res: SendResultList, from: address, to: address): coins {
+    var sum: coins = 0;
+    var i = 0;
+    while (i < res.size()) {
+        val tx = res.at(i).tx.load();
+        if (tx.getAccountAddress() == to) {
+            val m = tx.loadInMsg<RemainingBitsAndRefs>();
+            val info = m.info;
+            if (info is TlbInternalMessage) {
+                if (info.src == from) {
+                    sum += info.value.grams;
+                }
+            }
+        }
+        i += 1;
+    }
+    return sum;
 }
 
 // claim_asset from `from` for registry index `idx`, carrying `value`.

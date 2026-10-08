@@ -123,12 +123,14 @@ fun expectNoRefundsAndFloor(
 }
 
 // ── fast path ──
-// 50x50: side 1 pays its figure plus 0.0005 TON, side 2 then pays both
-// figures plus `extra`. At extra = 0 the balance is exactly what execution
-// needs and nothing is refunded; `extra` then lands in the refunds, below one
-// forward fee at 50,000. The fee wallet comparison uses a 10,000 baseline
-// rather than 0: with nothing to split, execution skips the split arithmetic
-// and uses a few gas units less, which the sweep would show.
+// 50x50: side 1 pays its figure plus 0.0005 TON; side 2 then pays its own
+// figure plus `extra`. Side 2's figure carries the top-up that keeps its
+// settlement share from going negative, which also covers what the balance
+// still lacks, so its payment completes the deal with nothing left over but
+// `extra` and side 1's 0.0005: both below refundMinimum, and at 50,000 below
+// one forward fee. The fee wallet comparison uses a 10,000 baseline rather
+// than 0: with nothing to split, execution skips the split arithmetic and uses
+// a few gas units less, which the sweep would show.
 
 fun executeWithExtra(tag: string, seed: int, extra: coins): (TinyDeal, SendResultList, coins) {
     val d = tinyDeal(
@@ -139,9 +141,9 @@ fun executeWithExtra(tag: string, seed: int, extra: coins): (TinyDeal, SendResul
         ton("0.0005"),
         false,
     );
-    val (t1, t2) = d.escrow.executionShortfall();
+    val (_t1, t2) = d.escrow.executionShortfall();
     val fw0 = testing.getAccountBalance(d.fw.address);
-    val res = d.escrow.sendText(d.o2.address, "execute_swap", t1 + t2 + extra);
+    val res = d.escrow.sendText(d.o2.address, "execute_swap", t2 + extra);
     return (d, res, testing.getAccountBalance(d.fw.address) - fw0);
 }
 
@@ -164,8 +166,8 @@ get fun `test a completing NFT deposit with refunds below one forward fee is rec
         ton("0.0005"),
         false,
     );
-    val (t1, t2) = d.escrow.executionShortfall();
-    val res = sendNftToEscrow(d.o2, d.lastNft, d.escrow.address, t1 + t2 + 50000, 99);
+    val (_t1, t2) = d.escrow.executionShortfall();
+    val res = sendNftToEscrow(d.o2, d.lastNft, d.escrow.address, t2 + 50000, 99);
     expect(res).toNotHaveTx({ to: d.escrow.address, actionExitCode: 37 });
     expect(d.escrow.receivedCounts()).toEqual((50, 50));
     expect(readMockOwner(d.lastNft)).toEqual(d.o1.address);
@@ -174,7 +176,7 @@ get fun `test a completing NFT deposit with refunds below one forward fee is rec
 
 // 50 NFTs on side 1, deposited without a hint (the linear search burns gas
 // that leaves the balance short), one jetton on side 2 that completes the
-// deal with a forward of both figures plus 50,000.
+// deal with a forward of side 2's own figure plus 50,000.
 get fun `test a completing jetton deposit with refunds below one forward fee is recorded and settles`() {
     val o1 = testing.treasury("erm-j-o1");
     val o2 = testing.treasury("erm-j-o2");
@@ -218,13 +220,13 @@ get fun `test a completing jetton deposit with refunds below one forward fee is 
         escrow.sendText(o1.address, "deposit_ton1", s1 + ton("0.0005")),
     ).toHaveAllSuccessfulTxs();
     expect(escrow.phase()).toEqual(PHASE_ACTIVE);
-    val (t1, t2) = escrow.executionShortfall();
+    val (_t1, t2) = escrow.executionShortfall();
     val res = sendJettonTransfer2(
         o2,
         minter,
         escrow.address,
         ton("10"),
-        t1 + t2 + 50000,
+        t2 + 50000,
         50,
     );
     expect(res).toNotHaveTx({ to: escrow.address, actionExitCode: 37 });

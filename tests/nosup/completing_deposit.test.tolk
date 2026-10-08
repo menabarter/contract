@@ -307,10 +307,11 @@ get fun `test per-side funding without the balance does not execute`() {
         sendNftToEscrow(o2, b.mustGet(i as uint16), escrow.address, f2, 50 + i);
         i += 1;
     }
-    // the getter names the balance deficit, split equally between the sides
+    // the getter names the balance deficit, split between the sides, plus
+    // what keeps each side's settlement share from going negative
     val (d1, d2) = escrow.executionShortfall();
     expect(d1 > 0).toEqual(true);
-    expect(d2 - d1 >= 0 && d2 - d1 <= 1).toEqual(true);
+    expect(d2 > 0).toEqual(true);
     expect(escrow.canAutoExecuteNow()).toEqual(false);
     expect(escrow.phase()).toEqual(PHASE_ACTIVE);
 }
@@ -404,10 +405,11 @@ get fun `test a completing jetton deposit with per-side funding but no balance w
         50,
     );
     expect(escrow.receivedCounts()).toEqual((50, 1));
-    // the getter names the balance deficit, split equally between the sides
+    // the getter names the balance deficit, split between the sides, plus
+    // what keeps each side's settlement share from going negative
     val (d1, d2) = escrow.executionShortfall();
     expect(d1 > 0).toEqual(true);
-    expect(d2 - d1 >= 0 && d2 - d1 <= 1).toEqual(true);
+    expect(d2 > 0).toEqual(true);
     expect(escrow.canAutoExecuteNow()).toEqual(false);
     expect(escrow.phase()).toEqual(PHASE_ACTIVE);
 }
