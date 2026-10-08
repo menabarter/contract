@@ -1278,6 +1278,129 @@ fun discoveryValue(n: int, slots: map<uint16, uint16>): coins {
     return total;
 }
 
+// A deal for the one-signature flow, prepared but not deployed.
+// Registry: 0 nft1 (side 1); 1 nft2 (side 2); 2 jetton of m1, 10 (side 2);
+// 3 jetton of m2, 20 (side 2). owner2 holds 100 of each jetton.
+struct OneSigDeal {
+    escrow: EscrowFixture
+    o1: Treasury
+    o2: Treasury
+    fw: Treasury
+    m1: address
+    m2: address
+    nft1: address
+    nft2: address
+}
+
+fun oneSigDeal(tag: string, seed: int): OneSigDeal {
+    val o1 = testing.treasury(tagged(tag, "-o1"));
+    val o2 = testing.treasury(tagged(tag, "-o2"));
+    val fw = testing.treasury(tagged(tag, "-fw"));
+    val m1 = deployJettonMinter(o2, seed);
+    val m2 = deployJettonMinter(o2, seed + 1);
+    mintJettons(m1, o2, ton("100"));
+    mintJettons(m2, o2, ton("100"));
+    val nft1 = deployNft(o1, seed + 2);
+    val nft2 = deployNft(o2, seed + 3);
+    var cfg = makeBasicConfig(o1, o2, fw);
+    var a: map<uint16, address> = [];
+    a.set(0, nft1);
+    var b: map<uint16, address> = [];
+    b.set(0, nft2);
+    cfg.nfts1 = a;
+    cfg.nfts1Count = 1;
+    cfg.nfts2 = b;
+    cfg.nfts2Count = 1;
+    var js: map<uint16, JettonCfg> = [];
+    js.set(
+        0,
+        JettonCfg {
+            minter: m1,
+            ownerSide: 2,
+            amount: ton("10"),
+        },
+    );
+    js.set(
+        1,
+        JettonCfg {
+            minter: m2,
+            ownerSide: 2,
+            amount: ton("20"),
+        },
+    );
+    cfg.jettons = js;
+    cfg.jettonsCount = 2;
+    return OneSigDeal {
+        escrow: prepareEscrow(cfg),
+        o1,
+        o2,
+        fw,
+        m1,
+        m2,
+        nft1,
+        nft2,
+    };
+}
+
+// What the dapp claims: the escrow's wallets from each minter's derivation.
+fun OneSigDeal.trueClaims(self): map<address, address> {
+    var c: map<address, address> = [];
+    c.set(self.m1, jwAddr(self.m1, self.escrow.address));
+    c.set(self.m2, jwAddr(self.m2, self.escrow.address));
+    return c;
+}
+
+fun OneSigDeal.discovery(self): coins {
+    var s: map<uint16, uint16> = [];
+    s.set(0, 1);
+    s.set(1, 1);
+    return discoveryValue(4, s);
+}
+
+// AcceptDeal below the discovery price writes the claims but asks no minter,
+// so the deposits that follow arrive before any answer. (SERVICE_FEE alone
+// would already cover discovery on this 4-entry registry.) The fee is then
+// completed separately.
+fun acceptWithoutDiscovery(d: OneSigDeal, claims: map<address, address>) {
+    expect(
+        sendAcceptDeal(d.o2.address, d.escrow, claims, d.discovery() - 1, true),
+    ).toHaveAllSuccessfulTxs();
+    expect(d.escrow.pendingWalletsLeft()).toEqual(2);
+    expect(
+        d.escrow.sendText(d.o2.address, "service_fee_owner2", SERVICE_FEE),
+    ).toHaveAllSuccessfulTxs();
+}
+
+// A transfer_notification sent directly from `from` — a fake unless `from`
+// is the escrow's real jetton wallet.
+fun fakeNotification(
+    from: address,
+    escrow: address,
+    depositor: address,
+    amount: coins,
+    hintIdx: int,
+    value: coins,
+): SendResultList {
+    var pb = beginCell().storeUint(0, 1);
+    if (hintIdx >= 0) {
+        pb = pb.storeUint(hintIdx, 16);
+    }
+    return net.send(
+        from,
+        createMessage({
+            bounce: BounceMode.NoBounce,
+            value,
+            dest: escrow,
+            body: JettonTransferNotification {
+                queryId: 1,
+                amount,
+                sender: depositor,
+                forwardPayload: pb.endCell().beginParse(),
+            },
+        }),
+    );
+}
+
 // claim_asset from `from` for registry index `idx`, carrying `value`.
 fun sendClaim(from: address, escrow: address, idx: int, value: coins): SendResultList {
     val m = createMessage({

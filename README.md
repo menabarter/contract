@@ -453,7 +453,7 @@ These are the limits this repository ships and tests:
 | Jetton positions per side | **15** | 25 per side, full cycle |
 
 Both are **per side**, not per deal — the symmetric form is the harsher one
-(`78×78` fails where `156×0` of the same total passes).
+(`76×76` fails where `152×0` of the same total passes).
 
 Both are also **flat**: they do not vary with what else the deal contains. A
 jetton-only deal has considerably more headroom than one carrying 300 NFTs,

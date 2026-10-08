@@ -90,7 +90,7 @@ get fun `test parity #11: 50x50 NFT with GRAM both sides (forward 0.05)`() {
 // Mixed configs — both sides carry NFT+jettons (or a jetton asymmetry), a
 // full cycle via runMixedSwap (nosup_helpers). The k1/k2 numbers in both
 // cases (10 and 20 jettons total) are far below the jetton boundary from one
-// minter (154 total, gas_probe.test.tolk).
+// minter (150 total symmetric, gas_probe.test.tolk).
 
 // #12: both sides mixed — 5 NFT + 5 jettons on each, GRAM going both ways
 // (1<->2, asymmetric — parity with the directional asserts of the other

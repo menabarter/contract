@@ -256,8 +256,8 @@ get fun `test gas probe: asym 256x1`() {
 // economics issue (attaching even 5 TON to TakeWalletAddress does not help
 // past the boundary). As with the NFT boundary (230/231 total, different for
 // sym/asym), the jetton boundary also differs by split:
-//   sym  77×77  (154 total) → PASS;  78×78  (156 total) → FAIL
-//   asym 156×0  (156 total) → PASS;  157×0  (157 total) → FAIL
+//   sym  75×75  (150 total) → PASS;  76×76  (152 total) → FAIL
+//   asym 152×0  (152 total) → PASS;  153×0  (153 total) → FAIL
 // (the asymmetric boundary is 2 higher than the symmetric one: the cost of
 // `.set()` in the TVM dictionary is sensitive to the order/shape of the
 // tree, not just the total count).
@@ -353,7 +353,7 @@ get fun `test gas probe: jetton sym 15x15`() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Mid-range jetton deals — deep inside the boundary (154/156 total).
+// Mid-range jetton deals — deep inside the boundary (150/152 total).
 // ─────────────────────────────────────────────────────────────────────────
 
 get fun `test gas boundary: jetton sym 19x19 (38 total) passes`() {
@@ -380,19 +380,19 @@ get fun `test gas boundary: jetton asym 38x0 (38 total) passes`() {
 // getting stuck in SETUP/pendingWalletsLeft=1 AFTER the deploy.
 // ─────────────────────────────────────────────────────────────────────────
 
-get fun `test gas boundary: jetton sym 77x77 (154 total) passes`() {
-    expect(runJettonSwap(77, 77)).toEqual(true);
+get fun `test gas boundary: jetton sym 75x75 (150 total) passes`() {
+    expect(runJettonSwap(75, 75)).toEqual(true);
 }
 
-get fun `test gas boundary: jetton sym 78x78 (156 total) fails at TakeWalletAddress — compute out-of-gas exit_code=-14`() {
-    val o1 = testing.treasury("jb7878-o1");
-    val o2 = testing.treasury("jb7878-o2");
-    val fw = testing.treasury("jb7878-fw");
+get fun `test gas boundary: jetton sym 76x76 (152 total) fails at TakeWalletAddress — compute out-of-gas exit_code=-14`() {
+    val o1 = testing.treasury("jb7676-o1");
+    val o2 = testing.treasury("jb7676-o2");
+    val fw = testing.treasury("jb7676-fw");
     val minter = deployJettonMinter(o1, 61);
     var cfg = makeBasicConfig(o1, o2, fw);
     var js: map<uint16, JettonCfg> = [];
     var i = 0;
-    while (i < 78) {
+    while (i < 76) {
         js.set(
             i as uint16,
             JettonCfg {
@@ -404,9 +404,9 @@ get fun `test gas boundary: jetton sym 78x78 (156 total) fails at TakeWalletAddr
         i += 1;
     }
     var j = 0;
-    while (j < 78) {
+    while (j < 76) {
         js.set(
-            (78 + j) as uint16,
+            (76 + j) as uint16,
             JettonCfg {
                 minter,
                 ownerSide: 2,
@@ -416,7 +416,7 @@ get fun `test gas boundary: jetton sym 78x78 (156 total) fails at TakeWalletAddr
         j += 1;
     }
     cfg.jettons = js;
-    cfg.jettonsCount = 156;
+    cfg.jettonsCount = 152;
     // The (top-level) deploy SUCCEEDS — handleDeployFee only sends
     // ProvideWalletAddress and completes; the failure is in the child
     // transaction (the minter's TakeWalletAddress response), which the TVM
@@ -426,19 +426,19 @@ get fun `test gas boundary: jetton sym 78x78 (156 total) fails at TakeWalletAddr
     expect(escrow.pendingWalletsLeft()).toEqual(1);
 }
 
-get fun `test gas boundary: jetton asym 156x0 (156 total) passes (EXACT adjacent boundary vs sym 78x78 fail — same total, asym form survives)`() {
-    expect(runJettonSwap(156, 0)).toEqual(true);
+get fun `test gas boundary: jetton asym 152x0 (152 total) passes`() {
+    expect(runJettonSwap(152, 0)).toEqual(true);
 }
 
-get fun `test gas boundary: jetton asym 157x0 (157 total) fails at TakeWalletAddress — compute out-of-gas exit_code=-14`() {
-    val o1 = testing.treasury("jb1570-o1");
-    val o2 = testing.treasury("jb1570-o2");
-    val fw = testing.treasury("jb1570-fw");
+get fun `test gas boundary: jetton asym 153x0 (153 total) fails at TakeWalletAddress — compute out-of-gas exit_code=-14`() {
+    val o1 = testing.treasury("jb1530-o1");
+    val o2 = testing.treasury("jb1530-o2");
+    val fw = testing.treasury("jb1530-fw");
     val minter = deployJettonMinter(o1, 61);
     var cfg = makeBasicConfig(o1, o2, fw);
     var js: map<uint16, JettonCfg> = [];
     var i = 0;
-    while (i < 157) {
+    while (i < 153) {
         js.set(
             i as uint16,
             JettonCfg {
@@ -450,7 +450,7 @@ get fun `test gas boundary: jetton asym 157x0 (157 total) fails at TakeWalletAdd
         i += 1;
     }
     cfg.jettons = js;
-    cfg.jettonsCount = 157;
+    cfg.jettonsCount = 153;
     val escrow = deployEscrow(o1, cfg);
     expect(escrow.phase()).toEqual(PHASE_SETUP);
     expect(escrow.pendingWalletsLeft()).toEqual(1);
@@ -458,7 +458,7 @@ get fun `test gas boundary: jetton asym 157x0 (157 total) fails at TakeWalletAdd
 
 // ─────────────────────────────────────────────────────────────────────────
 // 50×50 jettons from one minter (100 total) sits inside the boundary
-// (154/156 total), with a margin of ~54 total.
+// (150/152 total), with a margin of ~50 total.
 // ─────────────────────────────────────────────────────────────────────────
 
 get fun `test gas probe: jetton sym 50x50`() {
@@ -743,9 +743,9 @@ get fun `test limit probe: sym 250x250 (500 total)`() {
 //      but it can never activate — which is why the off-chain layer must
 //      reject such a deal BEFORE deploying it.
 //
-// Note the limits are per SIDE, not per total: the 78x78 / 156x0 pair above
-// shows the symmetric form failing where the asymmetric one of the same total
-// survives.
+// Note the dictionary's shape matters, not just the total: the boundary is
+// pinned in both the symmetric (75x75 / 76x76) and the asymmetric
+// (152x0 / 153x0) form: 76x76 fails where 152x0 of the same total passes.
 //
 // Amounts are irrelevant to all of this — a position carries a single
 // `coins` field, so a million-token position costs exactly what a one-token
@@ -784,7 +784,7 @@ get fun `test production limit: 15 jettons per side, no NFTs, completes`() {
 }
 
 // Boundary pair for ceiling B at 150 NFT per side, same style as the
-// 77x77/78x78 pair above: 25 per side is the last full cycle that
+// 75x75/76x76 pair above: 25 per side is the last full cycle that
 // completes, 30 already exhausts compute.
 get fun `test gas boundary: 150 NFT + 25 jettons per side still completes`() {
     val e = runMixedSwap(

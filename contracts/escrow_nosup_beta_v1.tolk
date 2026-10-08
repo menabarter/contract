@@ -880,14 +880,39 @@ fun handleDeployFee(_sender: address, value: coins) {
     st.sendProvides(plan);
 }
 
+// Side 2's claimed wallets go into its jetton slots that have none yet. A
+// claim only lets a deposit be recorded before the minter answers; the
+// answer confirms or undoes it (handleTakeWalletAddress). Side 1's slots, and
+// slots that already have an address, are left alone.
+fun Storage.writeClaims(mutate self, claims: map<address, address>) {
+    if (claims.isEmpty()) {
+        return;
+    }
+    val n = self.assetsCount as int;
+    var i = 0;
+    while (i < n) {
+        var a = self.assets.mustGet(i as uint16);
+        if (a.kind == 1 && a.ownerSide == 2 && a.jettonWallet == null) {
+            val c = claims.get(a.addr);
+            if (c.isFound) {
+                a.jettonWallet = c.loadValue();
+                a.walletUnverified = true;
+                self.assets.set(i as uint16, a);
+            }
+        }
+        i += 1;
+    }
+}
+
 // AcceptDeal: side 2 takes the deal in one signature. It is usually the first
 // message of owner2's batch and deploys the escrow; the transfers of side 2's
 // assets follow in the same batch, so it never fails for lack of value. What
 // it carries is side 2's payment; discovery starts only when that covers it,
 // otherwise deploy_fee starts it later. In ACTIVE it is a payment like any
 // other and may complete the deal (a failed execution bounces the whole
-// message back with its value).
-fun handleAcceptDeal(sender: address, value: coins, _msg: AcceptDeal) {
+// message back with its value). Claims are written only in SETUP; side 1's
+// minters are asked too.
+fun handleAcceptDeal(sender: address, value: coins, msg: AcceptDeal) {
     var st = Storage.load();
     assert (sender == st.owner2) throw Errors.NotOwner2;
     assert (st.phase == PHASE_ACTIVE || st.phase == PHASE_SETUP) throw Errors.AlreadyFinalized;
@@ -895,6 +920,7 @@ fun handleAcceptDeal(sender: address, value: coins, _msg: AcceptDeal) {
     g.creditSide2(value);
     st.grams = g.toCell();
     if (st.phase == PHASE_SETUP) {
+        st.writeClaims(msg.claims);
         val plan = st.planDiscovery();
         if (value >= st.discoveryCost(plan)) {
             st.sendProvides(plan);
@@ -907,47 +933,63 @@ fun handleAcceptDeal(sender: address, value: coins, _msg: AcceptDeal) {
 }
 
 // TEP-89 take_wallet_address: accepted ONLY from the address the request
-// was sent to (sender == the minter of some jetton asset), written into ALL
-// of that minter's assets (a minter can be on both sides), pendingWallets--.
-// Idempotency: a repeat response from an already-resolved minter / a
-// response from a non-minter / a response outside SETUP is silently
-// ignored (not thrown: these are external messages, and failing them gains
-// us nothing). An addr_none answer resolves nothing: the deal stays in SETUP.
+// was sent to (sender == the minter of some jetton asset). A minter resolves
+// when it has at least one pending slot (no wallet, or one side 2 only
+// claimed); every such slot of that minter takes the answered address (a
+// minter can be on both sides). A claimed slot already received keeps its
+// deposit when the minter names the claimed address; otherwise the deposit is
+// undone. One answer per minter decrements pendingWallets; a repeat finds
+// nothing pending and is ignored, as are an answer from a non-minter and one
+// outside SETUP (not thrown: these are external messages, and failing them
+// gains us nothing). An addr_none answer resolves nothing: the deal stays in
+// SETUP.
 fun handleTakeWalletAddress(sender: address, _value: coins, msg: TakeWalletAddressNosup) {
     var st = Storage.load();
     if (st.phase != PHASE_SETUP) {
         return;
     }
     var resolvedAny = false;
+    var undone = 0;
+    val w = msg.walletAddress;
     val n = st.assetsCount as int;
     var i: int = 0;
     while (i < n) {
         var a = st.assets.mustGet(i as uint16);
-        if (a.kind == 1 && a.addr == sender && a.jettonWallet == null) {
-            a.jettonWallet = msg.walletAddress;
-            st.assets.set(i as uint16, a);
+        if (a.addr == sender && a.kind == 1 && (a.jettonWallet == null || a.walletUnverified)) {
             resolvedAny = true;
+            // Only a claimed slot can be received before its minter answers,
+            // and only side 2 claims. If the minter names another address (or
+            // addr_none), undo the deposit; the TON it carried stays credited
+            // to side 2.
+            if (a.walletUnverified) {
+                if (a.received && (w == null || w! != a.jettonWallet!)) {
+                    a.received = false;
+                    undone += 1;
+                }
+            }
+            a.jettonWallet = w;
+            a.walletUnverified = false;
+            st.assets.set(i as uint16, a);
         }
         i += 1;
     }
     if (!resolvedAny) {
         return;
     }
-    if (msg.walletAddress == null) {
+    st.received2Count -= undone;
+    st.receivedJettons2 -= undone;
+    if (w == null) {
         // addr_none: the minter does not serve this escrow. Its slots stay
-        // without a wallet and the deal stays in SETUP until it is cancelled.
+        // without a wallet (a claim is erased) and the deal stays in SETUP
+        // until it is cancelled.
         st.save();
         return;
     }
     st.pendingWallets -= 1;
     if (st.pendingWallets == 0) {
         st.phase = PHASE_ACTIVE;
-        // Defensive call: by the time the last minter resolves, all
-        // NON-jetton deposits may already have arrived (NFT/GRAM are
-        // accepted during SETUP). A jetton deposit for an unresolved minter
-        // could not have arrived (per-asset gate), so right now the
-        // condition is almost certainly false — but the call is cheap and
-        // closes off future paths to ACTIVE.
+        // With claims every deposit may already be in when the last minter
+        // answers: this answer then completes the deal.
         st.tryAutoExecute(0);
     }
     st.save();
@@ -1919,6 +1961,15 @@ get fun assetJettonWallet(idx: int): address? {
     val st = lazy Storage.load();
     val a = st.assets.mustGet(idx as uint16);
     return a.jettonWallet;
+}
+
+// The jetton wallet of a registry slot and whether its minter confirmed it.
+// (address, false) is a wallet side 2 claimed that the minter has not
+// answered for yet; (null, false) means no wallet is known.
+get fun jettonWalletStatus(idx: int): (address?, bool) {
+    val st = lazy Storage.load();
+    val a = st.assets.mustGet(idx as uint16);
+    return (a.jettonWallet, a.jettonWallet != null && !a.walletUnverified);
 }
 
 // Batch distribution progress (mode, cursor).

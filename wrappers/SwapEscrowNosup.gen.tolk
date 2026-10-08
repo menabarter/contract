@@ -223,6 +223,10 @@ fun SwapEscrowNosup.assetJettonWallet(self, idx: int): address? {
     return net.runGetMethod(self.address, "assetJettonWallet", [idx]);
 }
 
+fun SwapEscrowNosup.jettonWalletStatus(self, idx: int): (address?, bool) {
+    return net.runGetMethod(self.address, "jettonWalletStatus", [idx]);
+}
+
 fun SwapEscrowNosup.distributionProgress(self): (int, int) {
     return net.runGetMethod(self.address, "distributionProgress");
 }

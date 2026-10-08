@@ -77,7 +77,7 @@ fun escrowTxStats(res: SendResultList, escrowAddr: address): (int, int) {
 
 // An ALL-JETTON deal of k1+k2 assets; returns (maxGas, txCount) of the last
 // deposit's cascade. One minter on both sides → discovery in a single
-// transaction (the handleTakeWalletAddress ceiling of ~154 is not touched
+// transaction (the handleTakeWalletAddress ceiling of ~150 is not touched
 // at 101).
 fun measureJettonBatch(k1: int, k2: int, tag: string): (int, int) {
     val o1 = testing.treasury("gs-j-o1");
