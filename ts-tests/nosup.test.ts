@@ -22,6 +22,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Address, Cell, Dictionary } from '@ton/core';
 import {
+    AcceptDeal,
     Asset,
     ClaimAsset,
     DistState,
@@ -88,6 +89,20 @@ console.log('1. Binary messages / state cells:');
 check(
     'ClaimAsset_idx7',
     ClaimAsset.toCell(ClaimAsset.create({ queryId: 0n, assetIndex: 7n })),
+);
+// The message the dapp builds for the one-signature flow: its claims map
+// must serialize bit for bit as the contract reads it.
+const claims = Dictionary.empty(Dictionary.Keys.Address(), Dictionary.Values.Address());
+claims.set(
+    Address.parse('0:00000000000000000000000000000000000000000000000000000000000000bb'),
+    Address.parse('0:00000000000000000000000000000000000000000000000000000000000000cc'),
+);
+check('AcceptDeal_1claim', AcceptDeal.toCell(AcceptDeal.create({ queryId: 5n, claims })));
+checkEq('AcceptDeal opcode is 0x6d5f0007', 0x6d5f0007, AcceptDeal.PREFIX);
+checkEq(
+    'jettonWalletStatus getter is generated',
+    'function',
+    typeof (SwapEscrowNosup.prototype as unknown as Record<string, unknown>).getJettonWalletStatus,
 );
 check(
     'DistState_idle',

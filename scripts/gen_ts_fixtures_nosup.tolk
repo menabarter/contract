@@ -58,6 +58,23 @@ fun main() {
         .hash(),
     );
 
+    // 1b. AcceptDeal — side 2 takes the deal; one claim, minter 0:..bb ->
+    //     wallet 0:..cc.
+    var claims: map<address, address> = [];
+    claims.set(
+        address("0:00000000000000000000000000000000000000000000000000000000000000bb"),
+        address("0:00000000000000000000000000000000000000000000000000000000000000cc"),
+    );
+    println(
+        "AcceptDeal_1claim {:x}",
+        AcceptDeal {
+            queryId: 5,
+            claims,
+        }
+        .toCell()
+        .hash(),
+    );
+
     // 2. DistState — batch distribution state, idle.
     println(
         "DistState_idle {:x}",

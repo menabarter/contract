@@ -197,10 +197,16 @@ balance check counts the paying message's value before its own gas, so the
 payment that completes the deal needs nothing extra. When both sides pay
 figures read at the same time, the first payment's own gas (758,401 nanoton
 for a `deposit_ton1`/`deposit_ton2` at today's gas price) is already gone
-when the second arrives: each side adds 0.001 TON to its figure. Once one
-side's payment has landed, re-reading shows that side owing only its half of
-the remaining deficit; the other side can then pay both figures and the deal
-executes. `execute_swap`
+when the second arrives: each side adds 0.001 TON to its figure. The figure
+also includes a top-up that keeps each side's settlement share from going
+negative: without it, a side that paid more up front (side 2 pays for
+deployment and wallet discovery in the one-signature flow) would end up
+covering part of the other side's half. With it, each side bears exactly half
+of everything the deal spent. The figure is exact when read after every asset
+has arrived, since each later deposit spends gas from the shared balance, so
+the TON part is paid last, and each side pays its own figure. A side that
+pays both figures still executes the deal, and what it paid beyond its own
+share comes back to it in its refund. `execute_swap`
 credits whatever value the caller attaches to that owner's own contribution
 before checking anything, so a single message can both pay a shortfall and
 execute. A side with only a TON leg and no assets pays its half of the shared
@@ -297,7 +303,71 @@ slots the hint points to, not necessarily the one the search would pick.
 The escrow trusts the wallet address a Jetton's minter names in its TEP-89
 `take_wallet_address` response and has no way to verify it independently —
 this is the trust TEP-89 discovery always carries, not something specific to
-this contract.
+this contract. A minter that answers `addr_none` (TEP-89's answer for an owner
+it does not serve) resolves nothing: the deal stays in SETUP and can be
+cancelled.
+
+#### A jetton deal in one signature
+
+The accepting side (owner2) can take a deal with jettons in a single signed
+batch: **`AcceptDeal` first**, then its NFT and jetton transfers.
+`AcceptDeal` (opcode `0x6d5f0007`, body `{queryId: uint64, claims:
+map<address, address>}`) carries the escrow's StateInit, so it deploys the
+contract, and its value is side 2's payment, credited to its service fee
+first, then to its TON leg, then as a reserve. `claims` maps each of side 2's
+minters to the escrow's jetton wallet for that minter, read off chain from the
+minter's `get_wallet_address(escrow)` before signing. Only owner2 may send it
+(402), only in SETUP or ACTIVE (410).
+
+A jetton notification from a claimed wallet is recorded **provisionally**:
+the slot counts as received, but the deal cannot execute until every minter
+has answered TEP-89 discovery (phase ACTIVE). The minter's answer confirms the
+claim, or replaces a wrong one and undoes any deposit recorded under it — the
+TON that deposit carried stays credited to side 2. A claim never applies to
+side 1's slots, and a notification from any address that is neither claimed
+nor confirmed matches nothing, so neither a stranger nor owner2 can get side
+1's assets with a false claim: a false claim only costs its author (tokens it
+sends elsewhere stay unrecorded, and on cancel a return to the false address
+is side 2's own transfer cost). Without claims the flow is the two-step one:
+a jetton that arrives before its minter answered is returned.
+
+`AcceptDeal` starts discovery only when its value covers it (the same price as
+`deploy_fee`); below that it is still accepted — the escrow is deployed and
+the value credited — and `deploy_fee` starts discovery later. An owner's
+`deploy_fee` counts as that owner's payment; a stranger's is shared equally.
+Discovery is priced per minter: `PROVIDE_WALLET_VALUE` plus the gas of the
+minter's answer, `TAKE_SCAN_BASE_UNITS + TAKE_SCAN_UNITS_PER_ENTRY × entries +
+TAKE_SET_UNITS × that minter's slots`, plus the scan of the registry. Whatever
+discovery and deployment spend is shared equally through `executionShortfall()`
+(see [Funding before execution](#funding-before-execution)).
+
+The last minter's answer usually completes the deal. It records its result
+before attempting execution, so if execution runs out of gas there the deal
+stays ACTIVE and `execute_swap` settles it.
+
+What a client must do:
+
+- put `AcceptDeal` first in the batch and check, before asking for the
+  signature, that the wallet's balance covers every message plus forwarding
+  fees: a wallet short of balance drops messages, and transfers that reach an
+  escrow that does not exist yet are lost (an undeployed address cannot
+  record a notification). A first message that fails in its handler still
+  deploys the account, so this concerns only a message that never arrives;
+- attach to `AcceptDeal` at least `calculateGasFee(1,000,000)` (about 0.067
+  TON today, below the service fee it carries anyway);
+- respect the wallet's `maxMessages`: a v4 wallet fits `AcceptDeal` plus three
+  assets; v5 fits up to 255 messages;
+- let owner1 deposit jettons only after `pendingWalletsLeft()` reaches 0;
+- use `jettonWalletStatus(idx)` → `(address?, verified)` to show whether a slot's
+  wallet is only claimed or confirmed.
+
+Limits (measured; the contract enforces the first, the client the others):
+
+| | Limit |
+|---|---|
+| Claims written by `AcceptDeal` | while `17,000 + 2,500 × entries + 8,000 × jetton slots ≤ 1,000,000` gas units (up to 94 claimed slots in a jetton-only deal); above it `AcceptDeal` only credits and the deal takes the two-step path |
+| Slots of one minter (`TAKE_MAX_SLOTS`) | 120 — above it the minter's answer may not fit one transaction and the deal may never leave SETUP |
+| Deal executed by the last answer (`ONE_SIGNATURE_MAX_ASSETS`) | 80 — above it the answer leaves the deal ACTIVE and `execute_swap` settles it |
 
 #### Risks this variant does not remove
 
@@ -371,6 +441,16 @@ privileged role this variant is built to avoid:
    `feeWallet` — which at today's gas price holds up to roughly a 4×
    increase in the network's gas price before it runs short; beyond that the
    chain can stop partway and needs `kick` the same way.
+
+10. **A one-signature batch whose `AcceptDeal` never arrives** (the wallet
+   dropped it for lack of balance, or it was not placed first) sends side 2's
+   transfers to an address with no contract: their notifications are lost, and
+   the tokens or NFTs stay with that address unrecorded once it is deployed.
+   Network ordering between different senders is not guaranteed either; in
+   practice `AcceptDeal` is the shortest path and arrives first. A client that
+   checks the balance and orders the batch as described above avoids this.
+11. **The jetton itself** — an admin who can lock a wallet or replace the
+   minter's code, as USDT's can — is outside the contract's control.
 
 One more risk leaves no asset stuck but blocks the deal: **a TON leg smaller
 than one forward fee (about 0.00007 TON) cannot be delivered.** The leg goes
@@ -453,7 +533,9 @@ These are the limits this repository ships and tests:
 | Jetton positions per side | **15** | 25 per side, full cycle |
 
 Both are **per side**, not per deal — the symmetric form is the harsher one
-(`76×76` fails where `152×0` of the same total passes).
+(`78×78` fails where `156×0` of the same total passes; in `SwapEscrowNosup`,
+whose minter reply also confirms or undoes claimed wallets, `76×76` fails
+where `152×0` passes).
 
 Both are also **flat**: they do not vary with what else the deal contains. A
 jetton-only deal has considerably more headroom than one carrying 300 NFTs,
@@ -483,9 +565,11 @@ gas budget:
   deposits are never trapped, but it can never execute either. Reject
   oversized deals *before* deploying them.
 
-The anchors for all of this are in `tests/gas_probe.test.tolk` — the shipped
-limit is exercised end to end, and both the last passing size and the failure
-mode are pinned.
+The anchors for all of this are in `tests/gas_probe.test.tolk` and
+`tests/nosup/gas_probe.test.tolk` — the shipped limit is exercised end to
+end, and both the last passing size and the failure mode are pinned. The
+limits of the one-signature flow are in
+[A jetton deal in one signature](#a-jetton-deal-in-one-signature).
 
 ## Layout
 
@@ -548,7 +632,7 @@ To check the deployed contract, build this source with Acton 1.2.0.
 The compiled code hash of `SwapEscrowNosup` with the current toolchain is:
 
 ```
-BDECE3AAC1685E18CEF537F2E9F23ADAB49C6BAF363AFC217D9BC06DCCF4BB58
+7CB8C52B9B9DEF249BCEA11E233A2510383B0A051AB588536DB03F6A67BC7C1B
 ```
 
 Run `acton build` and compare against `build/SwapEscrow.json` and
