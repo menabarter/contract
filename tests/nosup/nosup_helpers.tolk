@@ -1218,6 +1218,66 @@ fun sendTakeWallet(minter: address, escrow: address, wallet: address?): SendResu
     );
 }
 
+// The escrow for `cfg`, not deployed: AcceptDeal deploys it.
+fun prepareEscrow(cfg: EscrowConfig): EscrowFixture {
+    return SwapEscrowNosup.fromStorage(buildInitialStorage(cfg));
+}
+
+// owner2's AcceptDeal. `withInit` attaches the escrow's StateInit, as the first
+// message of a one-signature batch does.
+fun sendAcceptDeal(
+    from: address,
+    escrow: EscrowFixture,
+    claims: map<address, address>,
+    value: coins,
+    withInit: bool,
+): SendResultList {
+    if (withInit) {
+        return net.send(
+            from,
+            createMessage({
+                bounce: BounceMode.Only256BitsOfBody,
+                value,
+                dest: { stateInit: escrow.stateInit! },
+                body: AcceptDeal {
+                    queryId: 0,
+                    claims,
+                },
+            }),
+        );
+    }
+    return net.send(
+        from,
+        createMessage({
+            bounce: BounceMode.Only256BitsOfBody,
+            value,
+            dest: escrow.address,
+            body: AcceptDeal {
+                queryId: 0,
+                claims,
+            },
+        }),
+    );
+}
+
+// What starting discovery costs on an n-entry registry: one provide per
+// minter with a pending slot plus the registry scan. `slots` holds, per
+// minter (any key), how many of its slots are pending. Mirrors
+// Storage.discoveryCost byte for byte.
+fun discoveryValue(n: int, slots: map<uint16, uint16>): coins {
+    var total: coins = calculateGasFee(
+        BASECHAIN,
+        DEPLOY_BASE_GAS_UNITS + DEPLOY_GAS_UNITS_PER_ASSET * n,
+    );
+    var r = slots.findFirst();
+    while (r.isFound) {
+        total += PROVIDE_WALLET_VALUE +
+            calculateGasFee(BASECHAIN, TAKE_WALLET_GAS_UNITS_PER_ASSET * n);
+        r = slots.iterateNext(r);
+    }
+    return total;
+}
+
 // claim_asset from `from` for registry index `idx`, carrying `value`.
 fun sendClaim(from: address, escrow: address, idx: int, value: coins): SendResultList {
     val m = createMessage({

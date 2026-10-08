@@ -151,6 +151,22 @@ fun SwapEscrowNosup.sendClaimAsset(
     return net.send(from, genericMsg);
 }
 
+fun SwapEscrowNosup.sendAcceptDeal(
+    self,
+    from: address,
+    queryId: uint64,
+    claims: map<address, address>,
+    config: SendParams = {},
+): SendResultList {
+    val genericMsg = createMessage({
+        bounce: config.bounce,
+        value: config.value,
+        dest: self.address,
+        body: AcceptDeal { queryId, claims },
+    });
+    return net.send(from, genericMsg);
+}
+
 /// Send message to the contract with a custom body cell
 fun SwapEscrowNosup.sendAny(
     self,

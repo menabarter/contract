@@ -88,6 +88,9 @@ fun onInternalMessage(in: InMessage) {
         ClaimAsset => {
             handleClaimAsset(in.senderAddress, in.valueCoins, msg);
         }
+        AcceptDeal => {
+            handleAcceptDeal(in.senderAddress, in.valueCoins, msg);
+        }
         else => {
             throw Errors.UnknownOp;
         }
@@ -771,94 +774,84 @@ fun handlePlainTransfer(sender: address, value: coins) {
     st.save();
 }
 
-// The deploy command's value is deliberately NOT credited to the gram
-// counters — it pays for the discovery sends below, not for a side's deposit.
-// If the deal contains jettons, the contract deploys
-// into SETUP — provide_wallet_address (TEP-89) is sent to every UNIQUE
-// unresolved minter. A repeat deploy_fee while in SETUP is a legal manual
-// retry (the minter didn't respond): it only sends provide to minters not
-// yet resolved. The sender is deliberately not gated — instead, the caller
-// supplies the value for the provide sends.
-//
-// That pairing is the point. The caller must cover BOTH the provide sends
-// AND the gas this call itself burns walking the registry to find them
-// (DEPLOY_BASE_GAS_UNITS + DEPLOY_GAS_UNITS_PER_ASSET × assetsCount, see
-// storage.tolk) — checked by an assert BEFORE the distribution. Without the
-// scan share, a registry minter that keeps the provide value and never
-// answers lets a third party turn repeated, fully-funded deploy_fee calls
-// into a drain on the owners' GRAM deposits: each call is paid for exactly
-// on its provide sends, but the escrow's own balance quietly foots the scan.
-// perMinterProvideValue must match byte-for-byte
-// the formula in tests/escrow_helpers.tolk:deployEscrow (the same
-// PROVIDE_WALLET_VALUE + calculateGasFee(BASECHAIN,
-// TAKE_WALLET_GAS_UNITS_PER_ASSET × assetsCount) — otherwise the deploy
-// transaction, which already covers this same formula, would start failing
-// this assert).
-fun handleDeployFee(_sender: address, value: coins) {
-    val st = Storage.load();
-    assert (st.phase == PHASE_ACTIVE || st.phase == PHASE_SETUP) throw Errors.AlreadyFinalized;
-    if (st.phase != PHASE_SETUP) {
-        return; // NFT-only deal: no action needed
-    }
-    // O(n·log n) minter dedup over the jetton assets: a transaction-local map
-    // of seen minters, NOT persisted in Storage — it lives only for the
-    // duration of the call. The map is what keeps this sub-quadratic; deduping
-    // by re-scanning all previous assets on every iteration walls a jetton
-    // deal at 38-39 total assets, where the quadratic compute growth aborts
-    // the deploy with action_result_code=37 ("Not enough Toncoin").
-    val n = st.assetsCount as int;
-    // A flat PROVIDE_WALLET_VALUE (0.02 TON) only covers the
-    // TakeWalletAddress response while a minter owns a handful of assets.
-    // handleTakeWalletAddress scans all n assets and calls `.set()` on EVERY
-    // match — legitimate work, it resolves jettonWallet — so its cost grows
-    // with how many assets belong to one minter. At total=100 with a single
-    // minter this measures ~597,172 gas, while 0.02 TON buys only ~293,000:
-    // the deploy cascade then dies with exit_code=-14 ("Out of gas") ON THE
-    // MINTER'S RESPONSE, not in handleDeployFee itself. We add a gas reserve of
-    // TAKE_WALLET_GAS_UNITS_PER_ASSET × n to each provide message (the same
-    // units+calculateGasFee scheme, see storage.tolk) — covering the worst
-    // case (the queried minter owns all n assets).
-    val takeWalletReserve = calculateGasFee(BASECHAIN, TAKE_WALLET_GAS_UNITS_PER_ASSET * n);
-    val perMinterProvideValue = PROVIDE_WALLET_VALUE + takeWalletReserve;
-    // A SINGLE pass over the n assets (not two — DEPLOY_GAS_UNITS_PER_ASSET
-    // is calibrated for one scan, see storage.tolk): minters are deduped as
-    // before, but instead of sending immediately, the addresses of first
-    // occurrences are collected into a separate map<index, address> — the
-    // distribution happens in a SECOND, cheap pass AFTER the value gate,
-    // over only the unique minters (usually far fewer than n), rather than
-    // over all n assets again.
+// A jetton slot whose wallet its minter has not confirmed yet: no address, or
+// one that side 2 only claimed.
+fun Asset.walletPending(self): bool {
+    return self.kind == 1 && (self.jettonWallet == null || self.walletUnverified);
+}
+
+// The minters a discovery round asks, found in one pass over the registry:
+// each minter with a pending slot once, in registry order.
+struct DiscoveryPlan {
+    minters: map<uint16, address> // numbered 0..count-1
+    count: int
+}
+
+// O(n·log n) minter dedup: a transaction-local map of seen minters, NOT
+// persisted in Storage. The map is what keeps this sub-quadratic; deduping by
+// re-scanning all previous assets on every iteration walls a jetton deal at
+// 38-39 total assets, where the quadratic compute growth aborts the call with
+// action_result_code=37 ("Not enough Toncoin"). A SINGLE pass over the n
+// assets (DEPLOY_GAS_UNITS_PER_ASSET is calibrated for one scan, see
+// storage.tolk): the provides go out in a second, cheap pass over the unique
+// minters only (sendProvides).
+fun Storage.planDiscovery(self): DiscoveryPlan {
     var seen: map<address, bool> = [];
-    var toNotify: map<uint16, address> = [];
-    var unresolvedCount: int = 0;
-    var i: int = 0;
+    var minters: map<uint16, address> = [];
+    var count = 0;
+    val n = self.assetsCount as int;
+    var i = 0;
     while (i < n) {
-        val a = st.assets.mustGet(i as uint16);
-        if (a.kind == 1 && a.jettonWallet == null) {
-            val isFirst = seen.addIfNotExists(a.addr, true);
-            if (isFirst) {
-                toNotify.set(unresolvedCount as uint16, a.addr);
-                unresolvedCount += 1;
+        val a = self.assets.mustGet(i as uint16);
+        if (a.walletPending()) {
+            if (seen.addIfNotExists(a.addr, true)) {
+                minters.set(count as uint16, a.addr);
+                count += 1;
             }
         }
         i += 1;
     }
-    // The caller pays for everything this call spends: the provide values
-    // AND the registry scan above. The provides go out in mode 0, so their
-    // forwarding fees come out of their own value, not the balance.
-    val scanFee = calculateGasFee(
-        BASECHAIN,
-        DEPLOY_BASE_GAS_UNITS + DEPLOY_GAS_UNITS_PER_ASSET * n,
-    );
-    assert (
-        value >= perMinterProvideValue * unresolvedCount + scanFee
-    ) throw Errors.InsufficientBalance;
-    var k: int = 0;
-    while (k < unresolvedCount) {
-        val dest = toNotify.mustGet(k as uint16);
+    return DiscoveryPlan { minters, count };
+}
+
+// Value of one provide_wallet_address. A flat PROVIDE_WALLET_VALUE (0.02 TON)
+// only covers the TakeWalletAddress response while a minter owns a handful of
+// assets: handleTakeWalletAddress scans all n assets and calls `.set()` on
+// every slot of that minter, so its cost grows with how many assets belong to
+// it. At total=100 with a single minter this measures ~597,000 gas, while
+// 0.02 TON buys only ~293,000: the cascade then dies with exit_code=-14 ("Out
+// of gas") on the minter's response. Each provide therefore carries a gas
+// reserve of TAKE_WALLET_GAS_UNITS_PER_ASSET × n (the units+calculateGasFee
+// scheme, see storage.tolk), covering the worst case (the minter owns all n
+// assets).
+fun Storage.provideValue(self): coins {
+    return PROVIDE_WALLET_VALUE +
+        calculateGasFee(BASECHAIN, TAKE_WALLET_GAS_UNITS_PER_ASSET * (self.assetsCount as int));
+}
+
+// Everything a discovery round spends: the provides and the registry scan
+// that found them (DEPLOY_BASE_GAS_UNITS + DEPLOY_GAS_UNITS_PER_ASSET × n).
+// The caller pays it, so the escrow's balance does not: without the scan
+// share, a registry minter that keeps the provide value and never answers
+// would let a third party turn repeated, fully funded deploy_fee calls into a
+// drain on the owners' deposits. Must match tests/nosup/nosup_helpers.tolk
+// (deployEscrow, discoveryValue) byte for byte.
+fun Storage.discoveryCost(self, plan: DiscoveryPlan): coins {
+    val n = self.assetsCount as int;
+    return self.provideValue() * plan.count +
+        calculateGasFee(BASECHAIN, DEPLOY_BASE_GAS_UNITS + DEPLOY_GAS_UNITS_PER_ASSET * n);
+}
+
+// The provides go out in mode 0: their forwarding fees come out of their own
+// value, not the balance.
+fun Storage.sendProvides(self, plan: DiscoveryPlan) {
+    val value = self.provideValue();
+    var k = 0;
+    while (k < plan.count) {
         val m = createMessage({
             bounce: BounceMode.Only256BitsOfBody,
-            value: perMinterProvideValue,
-            dest,
+            value,
+            dest: plan.minters.mustGet(k as uint16),
             body: ProvideWalletAddress {
                 queryId: k,
                 ownerAddress: contract.getAddress(),
@@ -868,6 +861,49 @@ fun handleDeployFee(_sender: address, value: coins) {
         m.send(SEND_MODE_REGULAR);
         k += 1;
     }
+}
+
+// deploy_fee: the manual way to start (or retry) discovery. If the deal
+// contains jettons, the contract deploys into SETUP; provide_wallet_address
+// (TEP-89) goes to every unique minter with a pending slot. A repeat while in
+// SETUP is a legal retry for a minter that did not answer: it asks only the
+// minters still pending. The sender is not gated; the caller pays for
+// everything the call spends (discoveryCost), checked before any send.
+fun handleDeployFee(_sender: address, value: coins) {
+    val st = Storage.load();
+    assert (st.phase == PHASE_ACTIVE || st.phase == PHASE_SETUP) throw Errors.AlreadyFinalized;
+    if (st.phase != PHASE_SETUP) {
+        return; // NFT-only deal: no action needed
+    }
+    val plan = st.planDiscovery();
+    assert (value >= st.discoveryCost(plan)) throw Errors.InsufficientBalance;
+    st.sendProvides(plan);
+}
+
+// AcceptDeal: side 2 takes the deal in one signature. It is usually the first
+// message of owner2's batch and deploys the escrow; the transfers of side 2's
+// assets follow in the same batch, so it never fails for lack of value. What
+// it carries is side 2's payment; discovery starts only when that covers it,
+// otherwise deploy_fee starts it later. In ACTIVE it is a payment like any
+// other and may complete the deal (a failed execution bounces the whole
+// message back with its value).
+fun handleAcceptDeal(sender: address, value: coins, _msg: AcceptDeal) {
+    var st = Storage.load();
+    assert (sender == st.owner2) throw Errors.NotOwner2;
+    assert (st.phase == PHASE_ACTIVE || st.phase == PHASE_SETUP) throw Errors.AlreadyFinalized;
+    var g = st.grams.load();
+    g.creditSide2(value);
+    st.grams = g.toCell();
+    if (st.phase == PHASE_SETUP) {
+        val plan = st.planDiscovery();
+        if (value >= st.discoveryCost(plan)) {
+            st.sendProvides(plan);
+        }
+        st.save();
+        return;
+    }
+    st.tryAutoExecute(0);
+    st.save();
 }
 
 // TEP-89 take_wallet_address: accepted ONLY from the address the request

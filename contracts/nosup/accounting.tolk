@@ -22,6 +22,26 @@ fun paidBy(g: GramState, side: int): coins {
         : g.gram2Received + g.serviceFee2 + g.gram2DepositReserve;
 }
 
+// Credit a payment to side 2: its service fee first, then its TON leg, the
+// rest as a deposit reserve. All three count in paidBy, so the order only
+// decides which gate a payment meets first.
+fun GramState.creditSide2(mutate self, value: coins) {
+    var rest = value;
+    if (self.serviceFee2 < SERVICE_FEE) {
+        val gap = SERVICE_FEE - self.serviceFee2;
+        val fee = rest < gap ? rest : gap;
+        self.serviceFee2 += fee;
+        rest -= fee;
+    }
+    if (self.gram2Received < self.gram2Amount) {
+        val gap = self.gram2Amount - self.gram2Received;
+        val leg = rest < gap ? rest : gap;
+        self.gram2Received += leg;
+        rest -= leg;
+    }
+    self.gram2DepositReserve += rest;
+}
+
 fun transferCost(nfts: int, jettons: int): coins {
     return NFT_TRANSFER_VALUE * nfts + JETTON_TRANSFER_VALUE * jettons;
 }
