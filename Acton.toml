@@ -5,11 +5,21 @@ version = "0.1.0"
 license = "AGPL-3.0-or-later"
 
 [toolchain]
-acton = "1.1.0"
+acton = "1.2.1"
 
 [contracts.SwapEscrow]
 display-name = "SwapEscrow"
 src = "contracts/escrow_beta_v1.tolk"
+depends = []
+
+[contracts.SwapEscrowNosup]
+display-name = "SwapEscrowNosup"
+src = "contracts/escrow_nosup_beta_v1.tolk"
+depends = []
+
+[contracts.SwapEscrowV2]
+display-name = "SwapEscrowV2"
+src = "contracts/escrow_beta_v2.tolk"
 depends = []
 
 [contracts.NftItemMock]
@@ -27,17 +37,37 @@ display-name = "JettonMinterMock"
 src = "contracts/jetton_minter_mock.tolk"
 depends = []
 
+[contracts.NftItemGasMock]
+display-name = "NftItemGasMock"
+src = "contracts/nft_item_gas_mock.tolk"
+depends = []
+
 [lint.rules]
 # The codebase consistently uses the inline `createMessage(...).send(...)` form
 # in 19 places. Rewriting them would alter contract bodies for style alone
 # while the contract is under live testnet testing.
 create-message-inline-send = "allow"
 
+# `ton()` is kept as the standard-library alias of `grams()`. Rewriting the
+# calls would touch the deployed contract's source for naming alone.
+prefer-grams = "allow"
+
 [test]
 
 [fmt]
 width = 100
-ignore = []
+# Acton 1.2.0 changed the wrapping indent for continued binary expressions.
+# These pre-existing files are excluded instead of being reformatted, since
+# doing so would touch protected contract/test/script sources for style alone.
+ignore = [
+    "contracts/escrow_beta_v1.tolk",
+    "tests/escrow_helpers.tolk",
+    "tests/fuzz_invariants.test.tolk",
+    "scripts/smoke_mixed_testnet.tolk",
+    "scripts/smoke_batch_testnet.tolk",
+    "scripts/gen_ts_fixtures.tolk",
+    "scripts/smoke_supervisor_testnet.tolk",
+]
 
 [import-mappings]
 acton = ".acton"
