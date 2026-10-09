@@ -298,3 +298,7 @@ fun SwapEscrowV2.assetStatus(self, idx: int): (bool, bool, int) {
 fun SwapEscrowV2.claimableAssets(self): map<uint16, bool> {
     return net.runGetMethod(self.address, "claimableAssets");
 }
+
+fun SwapEscrowV2.supervisor(self): address {
+    return net.runGetMethod(self.address, "supervisor");
+}

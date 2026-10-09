@@ -36,53 +36,24 @@ get fun `test nosup cancel returns deposits`() {
     expect(readMockOwner(nft)).toEqual(o1.address);
 }
 
-get fun `test nosup former supervisor text commands are unknown`() {
+get fun `test supervisor text commands from an owner fail with 404`() {
     val o1 = testing.treasury("ns-u-o1");
     val o2 = testing.treasury("ns-u-o2");
     val fw = testing.treasury("ns-u-fw");
     val escrow = deployEscrow(o1, makeBasicConfig(o1, o2, fw));
     expect(escrow.sendText(o1.address, "emergency_withdraw_ton", ton("0.1"))).toHaveFailedTx({
         to: escrow.address,
-        exitCode: 130,
+        exitCode: Errors.NotSupervisor,
     });
     expect(escrow.sendText(o1.address, "emergency_collect_assets", ton("0.1"))).toHaveFailedTx({
         to: escrow.address,
-        exitCode: 130,
+        exitCode: Errors.NotSupervisor,
     });
     expect(escrow.sendText(o1.address, "emergency_return_assets", ton("0.1"))).toHaveFailedTx({
         to: escrow.address,
-        exitCode: 130,
+        exitCode: Errors.NotSupervisor,
     });
 }
-
-get fun `test nosup former supervisor binary opcodes are unknown`() {
-    val o1 = testing.treasury("ns-b-o1");
-    val o2 = testing.treasury("ns-b-o2");
-    val fw = testing.treasury("ns-b-fw");
-    val escrow = deployEscrow(o1, makeBasicConfig(o1, o2, fw));
-    var op = 0x6d5f0001;
-    while (op <= 0x6d5f0005) {
-        if (op != 0x6d5f0004) {
-            val body = beginCell()
-                .storeUint(op, 32)
-                .storeUint(0, 64)
-                .storeUint(0, 256)
-                .storeUint(
-                    0,
-                    11,
-                )
-                .endCell();
-            val m = createMessage({
-                bounce: BounceMode.Only256BitsOfBody,
-                value: ton("0.05"),
-                dest: escrow.address,
-                body,
-            });
-            expect(net.send(o1.address, m)).toHaveFailedTx({
-                to: escrow.address,
-                exitCode: Errors.UnknownOp,
-            });
-        }
-        op += 1;
-    }
-}
+// The nosup check that the supervisor opcodes are unknown has no V2 form:
+// SwapEscrowV2 parses them. sup_basic.test.tolk checks that each, with a
+// real body, fails with 404 from anyone but the supervisor.

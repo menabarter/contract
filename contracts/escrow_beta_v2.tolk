@@ -102,16 +102,16 @@ fun onInternalMessage(in: InMessage) {
         }
         // sup:begin
         SupervisorAssetReceived => {
-            throw Errors.UnknownOp;
+            handleSupervisorAssetReceived(in.senderAddress, in.valueCoins, msg);
         }
         RescueNft => {
-            throw Errors.UnknownOp;
+            handleRescueNft(in.senderAddress, in.valueCoins, msg);
         }
         RescueJetton => {
-            throw Errors.UnknownOp;
+            handleRescueJetton(in.senderAddress, in.valueCoins, msg);
         }
         ForceDeliver => {
-            throw Errors.UnknownOp;
+            handleForceDeliver(in.senderAddress, in.valueCoins, msg);
         }
         // sup:end
         else => {
@@ -154,6 +154,20 @@ fun handleTextCommand(sender: address, value: coins, cmd: slice) {
         handleKick(sender, value);
         return;
     }
+    // sup:begin
+    if (textCmdIs(cmd, "emergency_collect_assets")) {
+        handleEmergencyCollect(sender, value);
+        return;
+    }
+    if (textCmdIs(cmd, "emergency_return_assets")) {
+        handleEmergencyReturn(sender, value);
+        return;
+    }
+    if (textCmdIs(cmd, "emergency_withdraw_ton")) {
+        handleEmergencyWithdraw(sender, value);
+        return;
+    }
+    // sup:end
     // Unknown text command -> exit 130; part of the wire contract
     throw 130;
 }
@@ -1896,6 +1910,92 @@ fun handleNftReceived(sender: address, value: coins, msg: OwnershipAssigned) {
     st.save();
 }
 
+// sup:begin
+// ── Supervisor ──
+// The commands below are SwapEscrowV2's only difference from SwapEscrowNosup.
+// Each is accepted only from sup.supervisor (404 before any other check).
+
+fun requireSupervisor(sender: address, st: Storage): SupervisorState {
+    val sup = st.sup.load();
+    assert (sender == sup.supervisor) throw Errors.NotSupervisor;
+    return sup;
+}
+
+// emergency_return_assets: implemented in a later change.
+fun handleEmergencyReturn(sender: address, _value: coins) {
+    requireSupervisor(sender, Storage.load());
+    throw Errors.UnknownOp;
+}
+
+// emergency_collect_assets: implemented in a later change.
+fun handleEmergencyCollect(sender: address, _value: coins) {
+    requireSupervisor(sender, Storage.load());
+    throw Errors.UnknownOp;
+}
+
+// force_deliver: implemented in a later change.
+fun handleForceDeliver(sender: address, _value: coins, _msg: ForceDeliver) {
+    requireSupervisor(sender, Storage.load());
+    throw Errors.UnknownOp;
+}
+
+// emergency_withdraw_ton: the whole balance to the supervisor, in any phase,
+// deliberately — after DONE or CANCELLED TON can still sit on the balance. No
+// state changes; the supervisor's attachment pays this transaction's gas.
+fun handleEmergencyWithdraw(sender: address, _value: coins) {
+    val st = Storage.load();
+    val sup = requireSupervisor(sender, st);
+    createMessage({ bounce: BounceMode.NoBounce, value: 0, dest: sup.supervisor }).send(
+        SEND_MODE_CARRY_ALL_BALANCE,
+    );
+}
+
+// Registers a foreign or stuck NFT in the isolated rescue registry
+// (sup.rescueAssets), unrelated to the deal's assets; it is swept only by
+// emergency_collect_assets.
+fun handleSupervisorAssetReceived(sender: address, _value: coins, msg: SupervisorAssetReceived) {
+    var st = Storage.load();
+    var sup = requireSupervisor(sender, st);
+    sup.rescueAssets.set(sup.rescueCount, msg.assetAddr);
+    sup.rescueCount += 1;
+    st.sup = sup.toCell();
+    st.save();
+}
+
+// A one-off rescue of a named NFT to the supervisor (any address, deal assets
+// included). No phase gate and no state change — just a forward.
+fun handleRescueNft(sender: address, _value: coins, msg: RescueNft) {
+    val st = Storage.load();
+    val sup = requireSupervisor(sender, st);
+    sendNftTransfer(
+        msg.nftAddr,
+        QUERY_ID_NON_ASSET,
+        sup.supervisor,
+        sup.supervisor,
+        NFT_TRANSFER_VALUE,
+        SEND_MODE_REGULAR,
+    );
+}
+
+// The same for jettons: a named amount from one of the escrow's jetton wallets
+// to the supervisor. The escrow does not know its wallets' balances — the
+// supervisor supplies the amount. No phase gate and no state change.
+fun handleRescueJetton(sender: address, _value: coins, msg: RescueJetton) {
+    val st = Storage.load();
+    val sup = requireSupervisor(sender, st);
+    sendJettonTransfer(
+        msg.jettonWallet,
+        QUERY_ID_NON_ASSET,
+        msg.amount,
+        sup.supervisor,
+        sup.supervisor,
+        JETTON_TRANSFER_VALUE,
+        SEND_MODE_REGULAR,
+    );
+}
+
+// sup:end
+
 // Bounce handling for outgoing asset transfers.
 // bounce-body = 0xFFFFFFFF + the first 256 bits of the original body —
 // op(32) + queryId(64) are always available; the queryId of an outgoing
@@ -2108,3 +2208,9 @@ get fun claimableAssets(): map<uint16, bool> {
     }
     return out;
 }
+
+// sup:begin
+get fun supervisor(): address {
+    return Storage.load().sup.load().supervisor;
+}
+// sup:end
