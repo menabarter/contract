@@ -7,8 +7,9 @@ import "@acton/build"
 import "@acton/emulation/network"
 import "@acton/testing/assert"
 import "@contracts/messages"
-import "@contracts/nosup/messages"
 import "@contracts/nosup/storage"
+import "@contracts/shared/messages"
+import "@contracts/shared/types"
 
 /// Storage `Storage` is defined in `@contracts/nosup/storage`
 struct SwapEscrowNosup {

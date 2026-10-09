@@ -6,6 +6,7 @@ import "@acton/emulation/testing"
 import "@acton/testing/expect"
 import "@wrappers/SwapEscrowNosup.gen"
 import "@contracts/nosup/storage"
+import "@contracts/shared/types"
 import "nosup_helpers"
 
 get fun `test deposit_ton1 from owner1 is credited`() {

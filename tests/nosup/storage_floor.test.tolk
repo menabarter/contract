@@ -14,6 +14,7 @@ import "@acton/types/out_actions"
 import "@acton/types/transaction"
 import "@wrappers/SwapEscrowNosup.gen"
 import "@contracts/nosup/storage"
+import "@contracts/shared/types"
 import "nosup_helpers"
 
 const YEAR = 31536000

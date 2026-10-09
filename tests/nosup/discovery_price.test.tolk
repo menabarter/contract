@@ -9,6 +9,7 @@ import "@acton/emulation/testing"
 import "@acton/testing/expect"
 import "@wrappers/SwapEscrowNosup.gen"
 import "@contracts/nosup/storage"
+import "@contracts/shared/types"
 import "nosup_helpers"
 
 // Two minters, one slot each, on a 4-entry registry: each provide is priced by

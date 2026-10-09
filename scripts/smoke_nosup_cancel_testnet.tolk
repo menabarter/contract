@@ -24,6 +24,7 @@ import "@contracts/messages"
 import "@contracts/nft_item_mock"
 import "@wrappers/SwapEscrowNosup.gen"
 import "@contracts/nosup/storage"
+import "@contracts/shared/types"
 
 const NFT_DEPLOY_VALUE: coins = ton("0.03")
 const NFT_FORWARD1: coins = ton("0.05")

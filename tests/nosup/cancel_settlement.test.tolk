@@ -14,6 +14,7 @@ import "@acton/types/transaction"
 import "@contracts/messages"
 import "@wrappers/SwapEscrowNosup.gen"
 import "@contracts/nosup/storage"
+import "@contracts/shared/types"
 import "nosup_helpers"
 
 // Transactions in the trace that ran on `who`'s account. In a cancel's trace

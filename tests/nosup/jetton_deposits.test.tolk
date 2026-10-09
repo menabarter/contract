@@ -7,6 +7,7 @@ import "@acton/testing/expect"
 import "@contracts/messages"
 import "@wrappers/SwapEscrowNosup.gen"
 import "@contracts/nosup/storage"
+import "@contracts/shared/types"
 import "nosup_helpers"
 
 // JdFixture/tagged/jdSetup live in nosup_helpers.tolk — reused by

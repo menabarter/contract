@@ -34,6 +34,7 @@ import "@acton/types/big_array"
 import "@acton/types/transaction"
 import "@wrappers/SwapEscrowNosup.gen"
 import "@contracts/nosup/storage"
+import "@contracts/shared/types"
 import "nosup_helpers"
 
 // Maximum gasUsed across the trace + transaction count.

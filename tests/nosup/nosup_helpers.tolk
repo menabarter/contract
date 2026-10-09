@@ -28,6 +28,8 @@ import "@contracts/nft_item_mock"
 import "@wrappers/SwapEscrowNosup.gen"
 import "@contracts/nosup/messages"
 import "@contracts/nosup/storage"
+import "@contracts/shared/messages"
+import "@contracts/shared/types"
 
 // `ownerSide: int` does not compile as a map value — "type `int` is not
 // serializable, it doesn't define binary width" (Tolk requires map-value

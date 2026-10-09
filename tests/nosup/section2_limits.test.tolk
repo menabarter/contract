@@ -10,6 +10,7 @@ import "@acton/emulation/testing"
 import "@acton/testing/expect"
 import "@wrappers/SwapEscrowNosup.gen"
 import "@contracts/nosup/storage"
+import "@contracts/shared/types"
 import "nosup_helpers"
 
 // `jettons` slots of one minter on side 2 and `nfts` dummy NFT entries on

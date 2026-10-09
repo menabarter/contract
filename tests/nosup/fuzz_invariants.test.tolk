@@ -41,6 +41,7 @@ import "@acton/testing/expect"
 import "@acton/testing/fuzz"
 import "@wrappers/SwapEscrowNosup.gen"
 import "@contracts/nosup/storage"
+import "@contracts/shared/types"
 import "nosup_helpers"
 
 const FUZZ_GRAM2: coins = ton("0.3")

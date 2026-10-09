@@ -25,6 +25,8 @@ import "@contracts/nft_item_mock"
 import "@wrappers/SwapEscrowNosup.gen"
 import "@contracts/nosup/messages"
 import "@contracts/nosup/storage"
+import "@contracts/shared/messages"
+import "@contracts/shared/types"
 import "wallet_batch"
 
 const OS_JETTON1: coins = ton("10")

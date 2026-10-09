@@ -582,8 +582,9 @@ limits of the one-signature flow are in
 | `contracts/escrow_beta_v1.tolk` | the escrow contract with a supervisor role (`SwapEscrow`) |
 | `contracts/storage.tolk`, `messages.tolk` | storage layout and message schema for `SwapEscrow` |
 | `contracts/escrow_nosup_beta_v1.tolk` | the supervisor-free escrow contract (`SwapEscrowNosup`) |
-| `contracts/nosup/storage.tolk`, `nosup/messages.tolk` | storage layout, constants, error codes and the `ClaimAsset` message for `SwapEscrowNosup`; standard message structs are imported from `contracts/messages.tolk`, not duplicated |
-| `contracts/nosup/accounting.tolk` | pure settlement math for `SwapEscrowNosup` — who paid what, per-side transfer costs, and the refund split — with no storage access of its own |
+| `contracts/shared/types.tolk`, `shared/messages.tolk` | phases, constants, the asset and distribution types, and the escrow's own messages (`ClaimAsset`, `AcceptDeal`, `TakeWalletAddressNosup`); standard message structs are imported from `contracts/messages.tolk`, not duplicated |
+| `contracts/shared/accounting.tolk` | pure settlement math — who paid what, per-side transfer costs, and the refund split — with no storage access of its own |
+| `contracts/nosup/storage.tolk`, `nosup/messages.tolk`, `nosup/accounting.tolk` | the storage layout, error codes and incoming-message union of `SwapEscrowNosup`, and its settlement helpers that read that storage |
 | `contracts/nft_item_mock.tolk`, `jetton_wallet_mock.tolk`, `jetton_minter_mock.tolk`, `jetton_mock_lib.tolk`, `nft_item_gas_mock.tolk` | NFT and Jetton mocks (and their shared helper code) used by tests only; `nft_item_gas_mock.tolk` models an NFT with a higher gas threshold, for the `SwapEscrowNosup` claim tests |
 | `tests/` | 189 tests across 21 test files for `SwapEscrow`, plus a shared test-helper module |
 | `tests/nosup/` | 260 tests across 29 test files for `SwapEscrowNosup`, plus a shared test-helper module |

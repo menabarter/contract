@@ -10,6 +10,7 @@ import "@acton/emulation/testing"
 import "@acton/testing/expect"
 import "@wrappers/SwapEscrowNosup.gen"
 import "@contracts/nosup/storage"
+import "@contracts/shared/types"
 import "nosup_helpers"
 
 // A minter answers addr_none for an owner it does not serve. The answer must

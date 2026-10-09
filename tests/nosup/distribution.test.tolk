@@ -18,6 +18,7 @@ import "@acton/testing/expect"
 import "@contracts/messages"
 import "@wrappers/SwapEscrowNosup.gen"
 import "@contracts/nosup/storage"
+import "@contracts/shared/types"
 import "nosup_helpers"
 
 // ─────────────────────────────────────────────────────────────────────────

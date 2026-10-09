@@ -9,6 +9,7 @@ import "@acton/emulation/testing"
 import "@acton/testing/expect"
 import "@wrappers/SwapEscrowNosup.gen"
 import "@contracts/nosup/storage"
+import "@contracts/shared/types"
 import "nosup_helpers"
 
 // The one-signature order: AcceptDeal (no discovery yet), side 2's deposits,

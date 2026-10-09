@@ -8,6 +8,7 @@ import "@acton/testing/expect"
 import "@contracts/messages"
 import "@wrappers/SwapEscrowNosup.gen"
 import "@contracts/nosup/storage"
+import "@contracts/shared/types"
 import "nosup_helpers"
 
 // Config: 1 side-1 jetton for 100 tokens, no NFT/GRAM.

@@ -7,6 +7,7 @@ import "@acton/testing/expect"
 import "@contracts/messages"
 import "@wrappers/SwapEscrowNosup.gen"
 import "@contracts/nosup/storage"
+import "@contracts/shared/types"
 import "nosup_helpers"
 
 // A full swap: NFT(o1) + 100 jettons(o1) ↔ 50 jettons(o2) + 1 GRAM(o2).

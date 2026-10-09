@@ -7,6 +7,7 @@ import "@acton/emulation/testing"
 import "@acton/testing/expect"
 import "@wrappers/SwapEscrowNosup.gen"
 import "@contracts/nosup/storage"
+import "@contracts/shared/types"
 import "nosup_helpers"
 
 get fun `test auto-execute fires on last deposit 1x1 with GRAM both sides`() {

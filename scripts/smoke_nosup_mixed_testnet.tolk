@@ -23,6 +23,7 @@ import "@contracts/messages"
 import "@contracts/nft_item_mock"
 import "@wrappers/SwapEscrowNosup.gen"
 import "@contracts/nosup/storage"
+import "@contracts/shared/types"
 
 const DEAL_JETTON1: coins = ton("100") // side 1's jettons (wallet1)
 const DEAL_JETTON2: coins = ton("50") // side 2's jettons (wallet2)

@@ -21,6 +21,7 @@ import "@acton/emulation/network"
 import "@acton/emulation/scripts"
 import "@wrappers/SwapEscrowNosup.gen"
 import "@contracts/nosup/storage"
+import "@contracts/shared/types"
 import "onesig_common"
 import "wallet_batch"
 

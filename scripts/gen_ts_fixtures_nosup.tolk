@@ -16,6 +16,8 @@ import "@acton/io"
 import "@wrappers/SwapEscrowNosup.gen"
 import "@contracts/nosup/messages"
 import "@contracts/nosup/storage"
+import "@contracts/shared/messages"
+import "@contracts/shared/types"
 
 // Fixed addresses so the TS side can build EXACTLY the same thing (raw form 0:<hex>).
 const OWNER1 = "0:1111111111111111111111111111111111111111111111111111111111111111"

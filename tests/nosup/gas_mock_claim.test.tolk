@@ -34,6 +34,8 @@ import "@contracts/nft_item_gas_mock"
 import "@wrappers/SwapEscrowNosup.gen"
 import "@contracts/nosup/messages"
 import "@contracts/nosup/storage"
+import "@contracts/shared/messages"
+import "@contracts/shared/types"
 import "nosup_helpers"
 
 fun deployGasNft(owner: Treasury, seed: int, burnGas: int): address {

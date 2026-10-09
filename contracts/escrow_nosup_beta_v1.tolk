@@ -17,19 +17,25 @@
 // SwapEscrowNosup — escrow swap contract for TON without a supervisor role:
 // NFT, GRAM and Jetton deposits.
 
+// variant:begin
 import "@acton/tolk-stdlib/gas-payments"
 import "messages"
 import "nosup/accounting"
 import "nosup/messages"
 import "nosup/storage"
+import "shared/accounting"
+import "shared/messages"
+import "shared/types"
 
 contract SwapEscrowNosup {
     author: "MENA"
     version: "1.0.0-beta"
     description: "Escrow swap without a supervisor: NFT + GRAM + Jetton deposits"
     storage: Storage
-    incomingMessages: EscrowNosupBinaryMessage
+    incomingMessages: EscrowInMessage
 }
+
+// variant:end
 
 // `textCmdIs(cmd: slice, expected: slice)` does not compile: every call site
 // such as `textCmdIs(cmd, "deploy_fee")` fails with "can not pass `string` to
@@ -66,7 +72,7 @@ fun onInternalMessage(in: InMessage) {
         handleTextCommand(in.senderAddress, in.valueCoins, cmd);
         return;
     }
-    val msg = lazy EscrowNosupBinaryMessage.fromSlice(in.body);
+    val msg = lazy EscrowInMessage.fromSlice(in.body);
     match (msg) {
         OwnershipAssigned => {
             handleNftReceived(in.senderAddress, in.valueCoins, msg);

@@ -9,6 +9,8 @@ import "@contracts/messages"
 import "@wrappers/SwapEscrowNosup.gen"
 import "@contracts/nosup/messages"
 import "@contracts/nosup/storage"
+import "@contracts/shared/messages"
+import "@contracts/shared/types"
 import "nosup_helpers"
 
 // TEP-74 transfer opcode (contracts/messages.tolk) — used to build a

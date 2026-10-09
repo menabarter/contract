@@ -15,6 +15,7 @@ import "@acton/types/message"
 import "@acton/types/transaction"
 import "@wrappers/SwapEscrowNosup.gen"
 import "@contracts/nosup/storage"
+import "@contracts/shared/types"
 import "nosup_helpers"
 
 // The value of the first message `from` sent `to` in this trace, as it
