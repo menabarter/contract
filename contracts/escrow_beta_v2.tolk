@@ -1921,10 +1921,78 @@ fun requireSupervisor(sender: address, st: Storage): SupervisorState {
     return sup;
 }
 
-// emergency_return_assets: implemented in a later change.
-fun handleEmergencyReturn(sender: address, _value: coins) {
-    requireSupervisor(sender, Storage.load());
-    throw Errors.UnknownOp;
+// Sends every received asset to the recipient of `mode` (assetRecipient); in
+// DIST_COLLECT a slot whose wallet the minter has not confirmed stays. The
+// fast path of the supervisor's operations (registry of <= 100 entries).
+fun Storage.sendReceived(self, mode: int) {
+    var r = self.assets.findFirst();
+    while (r.isFound) {
+        val a = r.loadValue();
+        if (a.received && !(mode == DIST_COLLECT && a.walletUnverified)) {
+            val (dest, resp) = self.assetRecipient(a, mode);
+            sendAsset(a, r.getKey() as int, dest, resp);
+        }
+        r = self.assets.iterateNext(r);
+    }
+}
+
+// What a supervisor's batch operation must attach: the chain's later
+// transactions run on the escrow's balance, so the attachment pays for them
+// up front — the same addition quoteCancel makes for a batch cancel.
+fun Storage.emergencyChainReserve(self): coins {
+    val receivedTotal = (self.received1Count as int) + (self.received2Count as int);
+    return calculateGasFee(BASECHAIN, EXEC_GAS_UNITS_PER_SEND * receivedTotal) +
+        batchChainReserve(self.assetsCount as int, receivedTotal) +
+        continueMsgValue();
+}
+
+// emergency_return_assets — SETUP/ACTIVE -> CANCELLED, every received asset
+// back to its depositor, TON split by the settlement rules (as cancel_swap).
+// The supervisor's attachment pays this transaction's gas and any batch chain
+// and stays out of the split; the sides bear their own returns, the dust
+// margin and the storage floor. No balance check below the chain reserve and
+// no sweep to feeWallet: what is left stays on the escrow
+// (emergency_withdraw_ton). An attachment that cannot pay for the returns
+// fails the action phase, which rolls the whole transaction back.
+fun handleEmergencyReturn(sender: address, value: coins) {
+    var st = Storage.load();
+    requireSupervisor(sender, st);
+    assert (st.phase == PHASE_ACTIVE || st.phase == PHASE_SETUP) throw Errors.AlreadyFinalized;
+    val registrySize = st.assetsCount as int;
+    if (registrySize > FAST_PATH_MAX_ASSETS) {
+        assert (value >= st.emergencyChainReserve()) throw Errors.InsufficientBalance;
+    }
+    val g = st.grams.load();
+    val o1 = st.ownTransferCost(1);
+    val o2 = st.ownTransferCost(2);
+    val r = contract.getOriginalBalance() - value - o1 - o2 - DUST - st.storageFloor();
+    val (refund1, refund2) = splitRefunds(r, paidBy(g, 1) - o1, paidBy(g, 2) - o2);
+    st.phase = PHASE_CANCELLED;
+    val minRefund = sendableMinimum();
+    var queued: coins = 0;
+    if (refund1 >= minRefund) {
+        createMessage({ bounce: BounceMode.NoBounce, value: refund1, dest: st.owner1 }).send(
+            SEND_MODE_REGULAR,
+        );
+        queued += refund1;
+    }
+    if (refund2 >= minRefund) {
+        createMessage({ bounce: BounceMode.NoBounce, value: refund2, dest: st.owner2 }).send(
+            SEND_MODE_REGULAR,
+        );
+        queued += refund2;
+    }
+    if (registrySize <= FAST_PATH_MAX_ASSETS) {
+        st.sendReceived(DIST_RETURN);
+        st.save();
+        return;
+    }
+    st.dist = DistState {
+        mode: DIST_RETURN,
+        cursor: 0,
+    }.toCell();
+    st.runDistributionBatch(queued);
+    st.save();
 }
 
 // emergency_collect_assets: implemented in a later change.
