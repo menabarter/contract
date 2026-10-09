@@ -268,11 +268,14 @@ fun Storage.sharedCosts(self, g: GramState): coins {
 // balance so it does not freeze while claim_asset may still be needed.
 fun Storage.storageFloor(self): coins {
     val n = self.assetsCount as int;
+    // variant:begin
+    val baseCells = STORAGE_CELLS_BASE;
+    // variant:end
     return calculateStorageFee(
         BASECHAIN,
         STORAGE_FLOOR_SECONDS,
         STORAGE_BITS_BASE + STORAGE_BITS_PER_ASSET * n,
-        STORAGE_CELLS_BASE + STORAGE_CELLS_PER_ASSET * n,
+        baseCells + STORAGE_CELLS_PER_ASSET * n,
     );
 }
 
@@ -422,7 +425,9 @@ fun Storage.runDistributionBatch(mutate self, queued: coins) {
         BATCH_GAS_SOFT_CAP
     ) {
         val a = self.assets.mustGet(d.cursor);
+        // variant:begin
         if (a.received) {
+            // variant:end
             val (dest, resp) = self.assetRecipient(a, d.mode as int);
             sendAsset(a, d.cursor as int, dest, resp);
             sends += 1;

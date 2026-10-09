@@ -9,11 +9,8 @@ import "@contracts/messages"
 import "@wrappers/SwapEscrowV2.gen"
 import "@contracts/shared/types"
 import "@contracts/v2/storage"
+import "sup_helpers"
 import "v2_helpers"
-
-fun supAddr(): address {
-    return testing.treasury("v2-sup").address;
-}
 
 get fun `test the supervisor getter names the deal's supervisor`() {
     val f = setup1x1("sb-get", 79001);

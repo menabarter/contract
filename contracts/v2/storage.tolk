@@ -26,6 +26,14 @@ const DIST_RETURN = 4 // emergency_return: to depositors, without a sweep
 // QUERY_ID_NON_ASSET, so its bounces are ignored.
 const QUERY_ID_RESCUE_REGISTRY = 0xFFFF
 
+// Cells SwapEscrowV2's state holds beyond what STORAGE_CELLS_BASE models for
+// SwapEscrowNosup: the supervisor's code and its cell. Calibrated in
+// tests/v2/storage_floor.test.tolk (the generated copy of the nosup check):
+// the model must stay between 1x and 1.5x of the measured fee. Year fee,
+// measured / model: 1x1 16,825,199 / 22,346,983 (1.33x); 1,000 entries
+// 146,489,667 / 152,011,451 (1.04x), so the code can grow by about 85 cells.
+const SUP_STORAGE_CELLS = 90
+
 // sup:end
 
 // Error codes. The numeric values are part of the wire contract — integrators

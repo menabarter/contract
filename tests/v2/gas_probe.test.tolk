@@ -786,14 +786,15 @@ get fun `test production limit: 15 jettons per side, no NFTs, completes`() {
 }
 
 // Boundary pair for ceiling B at 150 NFT per side, same style as the
-// 75x75/76x76 pair above: 25 per side is the last full cycle that
-// completes, 30 already exhausts compute.
-get fun `test gas boundary: 150 NFT + 25 jettons per side still completes`() {
+// 75x75/76x76 pair above. On SwapEscrowV2 24 per side is the last full cycle
+// that completes: its completing deposit, which takes the linear fallback
+// (runMixedSwap's jetton hints are local indices), uses 996,488 gas.
+get fun `test gas boundary: 150 NFT + 24 jettons per side still completes`() {
     val e = runMixedSwap(
         150,
-        25,
+        24,
         150,
-        25,
+        24,
         ton("1"),
         ton("1"),
     );

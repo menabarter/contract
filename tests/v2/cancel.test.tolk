@@ -69,12 +69,13 @@ get fun `test cancel by owner2 returns deposits and received NFTs`() {
     // refund is that less half the shared costs (gas, dust) plus half the
     // deploy remainder, which arrived unattributed; the remainder is the
     // larger, so both refunds come out above the net contributions and differ
-    // by exactly 1.13. Measured: refund1 = 1.141074, refund2 = 0.011074.
+    // by exactly 1.13. Measured on SwapEscrowV2 (its larger
+    // storage floor is shared): refund1 = 1.138291, refund2 = 0.008291.
     expect(res).toHaveTx({
         from: escrow.address,
         to: o1.address,
         value: fun(v: coins): bool {
-            return v >= ton("1.14") && v <= ton("1.16");
+            return v >= ton("1.13") && v <= ton("1.16");
         },
     });
     // owner2 deposited nothing: it gets only its half of what was shared.
@@ -82,7 +83,7 @@ get fun `test cancel by owner2 returns deposits and received NFTs`() {
         from: escrow.address,
         to: o2.address,
         value: fun(v: coins): bool {
-            return v >= ton("0.01") && v <= ton("0.03");
+            return v >= ton("0.005") && v <= ton("0.03");
         },
     });
 }

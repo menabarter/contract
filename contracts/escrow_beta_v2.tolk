@@ -297,11 +297,15 @@ fun Storage.sharedCosts(self, g: GramState): coins {
 // balance so it does not freeze while claim_asset may still be needed.
 fun Storage.storageFloor(self): coins {
     val n = self.assetsCount as int;
+    // variant:begin
+    // SwapEscrowV2's state is larger: its code and the supervisor's cell.
+    val baseCells = STORAGE_CELLS_BASE + SUP_STORAGE_CELLS;
+    // variant:end
     return calculateStorageFee(
         BASECHAIN,
         STORAGE_FLOOR_SECONDS,
         STORAGE_BITS_BASE + STORAGE_BITS_PER_ASSET * n,
-        STORAGE_CELLS_BASE + STORAGE_CELLS_PER_ASSET * n,
+        baseCells + STORAGE_CELLS_PER_ASSET * n,
     );
 }
 
@@ -385,6 +389,12 @@ fun Storage.executeSwap(mutate self, committedOut: coins) {
 // on the delivery mode. For a jetton, excesses go to the jetton recipient;
 // for an NFT in execute, they go to the previous owner.
 fun Storage.assetRecipient(self, a: Asset, mode: int): (address, address) {
+    // sup:begin
+    if (mode == DIST_COLLECT) {
+        val supervisor = self.sup.load().supervisor;
+        return (supervisor, supervisor);
+    }
+    // sup:end
     if (mode == DIST_EXECUTE) {
         val newOwner = a.ownerSide == 1 ? self.owner2 : self.owner1;
         val resp = a.kind == 1 ? newOwner : (a.ownerSide == 1 ? self.owner1 : self.owner2);
@@ -451,7 +461,10 @@ fun Storage.runDistributionBatch(mutate self, queued: coins) {
         BATCH_GAS_SOFT_CAP
     ) {
         val a = self.assets.mustGet(d.cursor);
-        if (a.received) {
+        // variant:begin
+        // A collect leaves a slot whose wallet the minter never confirmed.
+        if (a.received && !(d.mode == DIST_COLLECT && a.walletUnverified)) {
+            // variant:end
             val (dest, resp) = self.assetRecipient(a, d.mode as int);
             sendAsset(a, d.cursor as int, dest, resp);
             sends += 1;
@@ -1995,10 +2008,44 @@ fun handleEmergencyReturn(sender: address, value: coins) {
     st.save();
 }
 
-// emergency_collect_assets: implemented in a later change.
-fun handleEmergencyCollect(sender: address, _value: coins) {
-    requireSupervisor(sender, Storage.load());
-    throw Errors.UnknownOp;
+// emergency_collect_assets — SETUP/ACTIVE -> CANCELLED, every received asset
+// and the rescue registry to the supervisor; no TON is refunded (the balance
+// is the supervisor's to withdraw). A jetton slot whose wallet the minter has
+// not confirmed is not sent: the claimed address may not be the escrow's
+// wallet. After checking it, the supervisor takes those tokens with
+// RescueJetton. A later minter answer is ignored (the phase is no longer
+// SETUP), so such a slot stays unconfirmed. Above 100 entries the attachment
+// must cover the batch chain (430), as for emergency_return_assets.
+fun handleEmergencyCollect(sender: address, value: coins) {
+    var st = Storage.load();
+    val sup = requireSupervisor(sender, st);
+    assert (st.phase == PHASE_ACTIVE || st.phase == PHASE_SETUP) throw Errors.AlreadyFinalized;
+    if ((st.assetsCount as int) > FAST_PATH_MAX_ASSETS) {
+        assert (value >= st.emergencyChainReserve()) throw Errors.InsufficientBalance;
+    }
+    st.phase = PHASE_CANCELLED;
+    if ((st.assetsCount as int) <= FAST_PATH_MAX_ASSETS) {
+        st.sendReceived(DIST_COLLECT);
+    } else {
+        st.dist = DistState {
+            mode: DIST_COLLECT,
+            cursor: 0,
+        }.toCell();
+        st.runDistributionBatch(0);
+    }
+    var rr = sup.rescueAssets.findFirst();
+    while (rr.isFound) {
+        sendNftTransfer(
+            rr.loadValue(),
+            QUERY_ID_RESCUE_REGISTRY,
+            sup.supervisor,
+            sup.supervisor,
+            NFT_TRANSFER_VALUE,
+            SEND_MODE_REGULAR,
+        );
+        rr = sup.rescueAssets.iterateNext(rr);
+    }
+    st.save();
 }
 
 // force_deliver: implemented in a later change.

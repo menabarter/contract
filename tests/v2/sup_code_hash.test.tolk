@@ -10,6 +10,6 @@ import "@acton/testing/expect"
 
 get fun `test SwapEscrowV2 code hash is pinned`() {
     expect(build("SwapEscrowV2").hash()).toEqual(
-        0xB6C5117A685568E8FF0919C2E36D62F5B2C686D6BA1BBEE986669CBB2A68A6AC,
+        0x75E0133833F0A45C739DB9E9A63B6EE507351D3CA6B8E10C921F6B3E3FD24CF8,
     );
 }
