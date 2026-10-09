@@ -175,5 +175,18 @@ distribution's retry state, and `fallback` parked an asset for a later rescue.
 
 ## Tooling
 
-Mutation testing and testnet runs of `SwapEscrowV2` are recorded below as they
-are done. Symbolic execution (TSA) has not been run.
+**Mutation testing** (Acton 1.2.1, critical and major levels, at the hash
+above): every line `SwapEscrowV2` adds or changes relative to
+`SwapEscrowNosup` — the supervisor's blocks, the variant lines and the storage
+floor — gave 104 mutants against `tests/v2/`: 102 killed, 0 survived, 2 did not
+compile. The rest of the contract is `SwapEscrowNosup`'s code, whose mutants
+are covered by that contract's own runs; the lines `SwapEscrowNosup` changed
+for this release (the owner's `deploy_fee` on an active deal and the storage
+floor's variant line) gave 42 mutants against `tests/nosup/`, all killed.
+
+**Testnet:** `scripts/smoke_v2_supervisor_testnet.tolk` (`emergency_return_assets`
+on a 1x1 deal; `ForceDeliver` with both `fallback` values after both
+deliveries of a deal bounced) and `scripts/smoke_v2_onesig_testnet.tolk` (the
+one-signature jetton flow) passed on the TON testnet.
+
+Symbolic execution (TSA) has not been run.
