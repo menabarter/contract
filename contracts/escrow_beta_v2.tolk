@@ -2048,10 +2048,63 @@ fun handleEmergencyCollect(sender: address, value: coins) {
     st.save();
 }
 
-// force_deliver: implemented in a later change.
-fun handleForceDeliver(sender: address, _value: coins, _msg: ForceDeliver) {
-    requireSupervisor(sender, Storage.load());
-    throw Errors.UnknownOp;
+// ForceDeliver — the supervisor delivers a recorded asset the push delivery
+// did not land: the same admission as claim_asset for recorded assets (a
+// jetton only while claimable; an NFT once the distribution has passed it).
+// An NFT the escrow never recorded is RescueNft's case. fallback = false: to
+// claim_asset's recipient (the counterparty while executing or after DONE,
+// the depositor after CANCELLED); fallback = true: to the supervisor, for a
+// recipient that keeps refusing. Paid entirely by the attachment (mode 64).
+// An NFT the escrow no longer owns refuses the transfer, so nothing moves.
+fun handleForceDeliver(sender: address, value: coins, msg: ForceDeliver) {
+    var st = Storage.load();
+    val sup = requireSupervisor(sender, st);
+    assert (
+        st.phase == PHASE_EXECUTING || st.phase == PHASE_DONE || st.phase == PHASE_CANCELLED
+    ) throw Errors.AlreadyFinalized;
+    val idx = msg.assetIndex;
+    assert ((idx as int) < (st.assetsCount as int)) throw Errors.BadAssetIndex;
+    var a = st.assets.mustGet(idx);
+    if (a.kind == 1) {
+        assert (a.claimable) throw Errors.NotClaimable;
+    } else {
+        assert (a.received) throw Errors.NotClaimable;
+        val d = st.dist.load();
+        assert (d.mode == DIST_IDLE || (idx as int) < (d.cursor as int)) throw Errors.NotClaimable;
+    }
+    var recipient = sup.supervisor;
+    if (!msg.fallback) {
+        val depositor = a.ownerSide == 1 ? st.owner1 : st.owner2;
+        val counterparty = a.ownerSide == 1 ? st.owner2 : st.owner1;
+        recipient = st.phase == PHASE_CANCELLED ? depositor : counterparty;
+    }
+    val need = a.kind == 1 ? JETTON_TRANSFER_VALUE : NFT_TRANSFER_VALUE;
+    assert (value >= need) throw Errors.InsufficientBalance;
+    if (a.claimable) {
+        a.claimable = false;
+        st.assets.set(idx, a);
+        st.save();
+    }
+    if (a.kind == 1) {
+        sendJettonTransfer(
+            a.jettonWallet!,
+            idx as int,
+            a.amount,
+            recipient,
+            recipient,
+            0,
+            SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE,
+        );
+    } else {
+        sendNftTransfer(
+            a.addr,
+            idx as int,
+            recipient,
+            recipient,
+            0,
+            SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE,
+        );
+    }
 }
 
 // emergency_withdraw_ton: the whole balance to the supervisor, in any phase,

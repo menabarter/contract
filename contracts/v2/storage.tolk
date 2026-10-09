@@ -30,8 +30,8 @@ const QUERY_ID_RESCUE_REGISTRY = 0xFFFF
 // SwapEscrowNosup: the supervisor's code and its cell. Calibrated in
 // tests/v2/storage_floor.test.tolk (the generated copy of the nosup check):
 // the model must stay between 1x and 1.5x of the measured fee. Year fee,
-// measured / model: 1x1 16,825,199 / 22,346,983 (1.33x); 1,000 entries
-// 146,489,667 / 152,011,451 (1.04x), so the code can grow by about 85 cells.
+// measured / model: 1x1 17,150,010 / 22,346,983 (1.30x); 1,000 entries
+// 146,814,478 / 152,011,451 (1.035x), so the code can grow by about 80 cells.
 const SUP_STORAGE_CELLS = 90
 
 // sup:end
