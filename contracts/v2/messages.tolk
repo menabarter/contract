@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // variant:begin
-// Incoming binary messages of SwapEscrowNosup.
+// Incoming binary messages of SwapEscrowV2.
 // variant:end
 // The standard TEP structures and ContinueDistribution come from ../messages,
 // the escrow's own from shared/messages.
@@ -21,4 +21,8 @@ type EscrowInMessage =
     | ContinueDistribution
     | ClaimAsset
     | AcceptDeal
+    | SupervisorAssetReceived
+    | RescueNft
+    | RescueJetton
+    | ForceDeliver
 // variant:end

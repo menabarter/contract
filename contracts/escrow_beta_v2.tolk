@@ -15,24 +15,25 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // variant:begin
-// SwapEscrowNosup — escrow swap contract for TON without a supervisor role:
-// NFT, GRAM and Jetton deposits.
+// SwapEscrowV2 — escrow swap contract for TON with a supervisor role:
+// NFT, GRAM and Jetton deposits. Outside the supervisor blocks it is
+// SwapEscrowNosup line for line (ts-tests/v2-sync.test.ts).
 // variant:end
 
 // variant:begin
 import "@acton/tolk-stdlib/gas-payments"
 import "messages"
-import "nosup/accounting"
-import "nosup/messages"
-import "nosup/storage"
 import "shared/accounting"
 import "shared/messages"
 import "shared/types"
+import "v2/accounting"
+import "v2/messages"
+import "v2/storage"
 
-contract SwapEscrowNosup {
+contract SwapEscrowV2 {
     author: "MENA"
-    version: "1.0.0-beta"
-    description: "Escrow swap without a supervisor: NFT + GRAM + Jetton deposits"
+    version: "2.0.0-beta"
+    description: "Escrow swap with a supervisor: NFT + GRAM + Jetton deposits"
     storage: Storage
     incomingMessages: EscrowInMessage
 }
@@ -99,6 +100,20 @@ fun onInternalMessage(in: InMessage) {
         AcceptDeal => {
             handleAcceptDeal(in.senderAddress, in.valueCoins, msg);
         }
+        // sup:begin
+        SupervisorAssetReceived => {
+            throw Errors.UnknownOp;
+        }
+        RescueNft => {
+            throw Errors.UnknownOp;
+        }
+        RescueJetton => {
+            throw Errors.UnknownOp;
+        }
+        ForceDeliver => {
+            throw Errors.UnknownOp;
+        }
+        // sup:end
         else => {
             throw Errors.UnknownOp;
         }

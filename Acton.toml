@@ -17,6 +17,11 @@ display-name = "SwapEscrowNosup"
 src = "contracts/escrow_nosup_beta_v1.tolk"
 depends = []
 
+[contracts.SwapEscrowV2]
+display-name = "SwapEscrowV2"
+src = "contracts/escrow_beta_v2.tolk"
+depends = []
+
 [contracts.NftItemMock]
 display-name = "NftItemMock"
 src = "contracts/nft_item_mock.tolk"
