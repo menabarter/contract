@@ -1,3 +1,4 @@
+// GENERATED from tests/nosup/completing_deposit.test.tolk by ts-tests/gen-v2-tests.ts — edit the source, then run npm run gen:v2.
 // Copyright (C) 2026 MENA
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
@@ -8,10 +9,10 @@ import "@acton/io"
 import "@acton/emulation/network"
 import "@acton/emulation/testing"
 import "@acton/testing/expect"
-import "@wrappers/SwapEscrowNosup.gen"
-import "@contracts/nosup/storage"
+import "@wrappers/SwapEscrowV2.gen"
 import "@contracts/shared/types"
-import "nosup_helpers"
+import "@contracts/v2/storage"
+import "v2_helpers"
 
 struct Completing {
     escrow: EscrowFixture

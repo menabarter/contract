@@ -14,6 +14,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { generate } from './gen-v2-tests';
 
 const root = join(__dirname, '..');
 const PAIRS: [string, string][] = [
@@ -85,5 +86,16 @@ for (const [a, b] of PAIRS) {
         failed++;
     }
 }
-console.log(`\n=== RESULT: ${PAIRS.length - failed} passed, ${failed} failed ===`);
+const generated = generate();
+let stale = 0;
+for (const [path, text] of generated) {
+    const p = join(root, path);
+    if (!existsSync(p) || readFileSync(p, 'utf8') !== text) {
+        console.log(`  ✗ ${path} is stale — run npm run gen:v2`);
+        stale++;
+    }
+}
+if (stale === 0) console.log(`  ✓ ${generated.size} generated V2 test files are up to date`);
+failed += stale;
+console.log(`\n=== RESULT: ${failed} failed ===`);
 if (failed > 0) process.exit(1);

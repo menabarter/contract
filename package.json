@@ -8,6 +8,7 @@
     "fixtures": "acton script scripts/gen_ts_fixtures.tolk > ts-tests/fixtures.txt && acton script scripts/gen_ts_fixtures_nosup.tolk > ts-tests/fixtures-nosup.txt",
     "test": "tsx ts-tests/wrapper.test.ts && tsx ts-tests/nosup.test.ts && tsx ts-tests/v2-sync.test.ts",
     "test:sync": "tsx ts-tests/v2-sync.test.ts",
+    "gen:v2": "tsx ts-tests/gen-v2-tests.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {
