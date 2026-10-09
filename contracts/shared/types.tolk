@@ -4,11 +4,11 @@
 
 // Phases. SETUP is used when a deal involves jettons — jetton deals deploy
 // into PHASE_SETUP and wait for TEP-89 discovery of all unique minters (see
-// handleDeployFee/handleTakeWalletAddress in escrow_nosup_beta_v1.tolk); NFT-only
+// handleDeployFee/handleTakeWalletAddress in the escrow contracts); NFT-only
 // deals (pendingWallets == 0) still deploy straight into ACTIVE.
 const PHASE_SETUP = 0
 const PHASE_ACTIVE = 1
-const PHASE_EXECUTING = 2 // set only for large deals routed through the batch-distribution engine (see Storage.executeSwap in escrow_nosup_beta_v1.tolk)
+const PHASE_EXECUTING = 2 // set only for large deals routed through the batch-distribution engine (see Storage.executeSwap)
 const PHASE_DONE = 3
 const PHASE_CANCELLED = 4
 

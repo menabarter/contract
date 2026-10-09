@@ -41,29 +41,17 @@ contract SwapEscrowV2 {
 
 // variant:end
 
-// `textCmdIs(cmd: slice, expected: slice)` does not compile: every call site
-// such as `textCmdIs(cmd, "deploy_fee")` fails with "can not pass `string` to
-// `slice`", because Tolk — unlike FunC — does not implicitly coerce string
-// literals to slice. So `expected` takes a `string`, and the comparison goes
-// through slice.hash() (common.tolk:652, a representation hash of the
-// content) on its `.beginParse()` — the same function used for `cmd` (not
-// string.hash(), which is a different algorithm, FNV-1a — the two must not
-// be mixed, since the outputs would not match).
+// Whether a text command equals `expected`. Tolk does not coerce a string
+// literal to slice, so `expected` is a string, and both sides are compared by
+// slice.hash() (a representation hash of the content). string.hash() is a
+// different algorithm (FNV-1a) and must not be mixed with it.
 fun textCmdIs(cmd: slice, expected: string): bool {
     return cmd.hash() == expected.beginParse().hash();
 }
 
-// Early stub signatures took `in: InMessage` as an ordinary parameter
-// (`fun handlePlainTransfer(in: InMessage) { ... }`), but the compiler
-// rejects this: "using `in` as an object is prohibited, because `InMessage`
-// is a built-in struct, its fields are mapped to TVM instructions"
-// (common.tolk:1906 — `in.senderAddress`/`in.body` are not fields of an
-// ordinary struct but accesses that get expanded into asm instructions;
-// `InMessage` itself cannot be passed around as a value). So the router
-// unpacks the needed fields (`senderAddress`, `valueCoins`) at call time and
-// passes them to the handlers as ordinary `address`/`coins` parameters —
-// exactly what the real handler implementations need for checking the
-// sender and amount.
+// `InMessage` cannot be passed around as a value (its fields map to TVM
+// instructions), so the router hands each handler the fields it needs —
+// `senderAddress` and `valueCoins` — as plain parameters.
 fun onInternalMessage(in: InMessage) {
     if (in.body.isEmpty()) {
         handlePlainTransfer(in.senderAddress, in.valueCoins);
@@ -860,7 +848,7 @@ struct DiscoveryPlan {
 // 38-39 total assets, where the quadratic compute growth aborts the call with
 // action_result_code=37 ("Not enough Toncoin"). A SINGLE pass over the n
 // assets (DEPLOY_GAS_UNITS_PER_ASSET is calibrated for one scan, see
-// storage.tolk): the provides go out in a second, cheap pass over the unique
+// shared/types.tolk): the provides go out in a second, cheap pass over the unique
 // minters only (sendProvides).
 fun Storage.planDiscovery(self): DiscoveryPlan {
     var seen: map<address, uint16> = [];
@@ -891,7 +879,7 @@ fun Storage.planDiscovery(self): DiscoveryPlan {
 // Value of one provide_wallet_address to a minter with `slots` pending slots:
 // the request plus the gas of its answer — a walk of the whole registry and,
 // for each of its slots, the most expensive write (a provisional deposit
-// undone). See TAKE_SCAN_BASE_UNITS in storage.tolk.
+// undone). See TAKE_SCAN_BASE_UNITS in shared/types.tolk.
 fun Storage.provideValueFor(self, slots: int): coins {
     val n = self.assetsCount as int;
     return PROVIDE_WALLET_VALUE +
@@ -2208,13 +2196,8 @@ fun onBouncedMessage(in: InMessageBounced) {
     st.save();
 }
 
-// The straightforward approach would call
-// `lazy Storage.fromCell(contract.getData())` directly, bypassing the
-// Storage.load() wrapper, since `lazy` is compiler magic for
-// T.fromCell/fromSlice and does not apply through a user-defined wrapper
-// function. In practice, `lazy Storage.load()` also deserializes lazily, so
-// we keep a single consistent style for accessing storage through
-// Storage.load()/save().
+// Getters read storage with `lazy Storage.load()`, which deserializes only the
+// fields they use.
 get fun phase(): int {
     val st = lazy Storage.load();
     return st.phase;
