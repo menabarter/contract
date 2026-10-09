@@ -2113,6 +2113,9 @@ fun handleForceDeliver(sender: address, value: coins, msg: ForceDeliver) {
 fun handleEmergencyWithdraw(sender: address, _value: coins) {
     val st = Storage.load();
     val sup = requireSupervisor(sender, st);
+    // SAFETY: the whole function — requireSupervisor has checked the sender,
+    // and there is no state to protect (no phase gate, no save). A full
+    // balance sweep to the supervisor is what this command is.
     createMessage({ bounce: BounceMode.NoBounce, value: 0, dest: sup.supervisor }).send(
         SEND_MODE_CARRY_ALL_BALANCE,
     );
