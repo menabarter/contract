@@ -153,6 +153,29 @@ get fun `test batch collect needs the chain reserve`() {
     expect(readMockOwner(f.nfts.mustGet(1))).toEqual(supAddr());
 }
 
+// With the attachment exactly at the chain reserve, the whole chain — its
+// first transaction included — is paid by the attachment: the balance loses
+// no more than the asset transfers themselves. A walk-heavy chain (1,000
+// entries, 2 deposited) and a send-heavy one (300 deposited).
+fun collectsAtReserve(f: ActiveRegistry, n: int, received: int) {
+    val before = testing.getAccountBalance(f.escrow.address);
+    val res = f.escrow.sendText(supAddr(), "emergency_collect_assets", chainReserve(n, received));
+    expect(res).toHaveAllSuccessfulTxs();
+    expect(f.escrow.phase()).toEqual(PHASE_CANCELLED);
+    expect(f.escrow.distributionProgress()).toEqual((DIST_IDLE, n));
+    expect(readMockOwner(f.nfts.mustGet((received - 1) as uint16))).toEqual(supAddr());
+    val after = testing.getAccountBalance(f.escrow.address);
+    expect(after >= before - NFT_TRANSFER_VALUE * received).toEqual(true);
+}
+
+get fun `test a walk-heavy batch collect at the chain reserve leaves the balance`() {
+    collectsAtReserve(deployActiveRegistry("sc-w", 1000, 2, 0x7A0000), 1000, 2);
+}
+
+get fun `test a send-heavy batch collect at the chain reserve leaves the balance`() {
+    collectsAtReserve(deployActiveRegistry("sc-s", 300, 300, 0x7B0000), 300, 300);
+}
+
 get fun `test a second emergency_collect fails with 410`() {
     val f = setup1x1("sc-5", 79351);
     f.escrow.sendText(supAddr(), "emergency_collect_assets", ton("0.3"));

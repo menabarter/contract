@@ -63,9 +63,9 @@ and through the getter `supervisor()`.
 
 The registry, amounts, owners and fee wallet are fixed in `stateInit`; no
 supervisor command writes them. The supervisor cannot execute the swap on
-different terms, cannot redirect a delivery that is in progress, and cannot
-make the contract send anything without sending one of its seven commands
-itself.
+different terms, cannot send an asset to anyone but its rightful recipient or
+itself, and cannot make the contract send anything without sending one of its
+seven commands itself.
 
 ## 3. [Design] The sender check comes first
 
@@ -84,7 +84,7 @@ Phases `SETUP` and `ACTIVE`; the deal becomes `CANCELLED`.
   what the deal shared. The attachment is excluded from `R`, so the
   supervisor pays this transaction's gas and the parties do not pay for an
   operation they did not ask for. `sup_return.test.tolk` checks the refund sum
-  exactly and the two sides' outlays to within one nanoton.
+  to within 0.00001 TON and the two sides' outlays to within one nanoton.
 - **No sweep.** Nothing is sent to `feeWallet`; `DUST` and the storage floor
   stay on the escrow, where `emergency_withdraw_ton` can reach them.
 - **Rollback.** If the balance cannot pay the returns, the action phase fails
@@ -149,12 +149,17 @@ distribution's retry state, and `fallback` parked an asset for a later rescue.
    escrow's balance is zero; storage fees accrue as debt, and a long-unpaid
    escrow freezes. `claim_asset` is funded by its own attachment, but a frozen
    account cannot run it until someone pays the debt.
-3. **A `ForceDeliver` or rescue that the asset refuses** costs the
-   supervisor's attachment, which bounces back to the escrow's balance, not
-   to the supervisor.
-4. **`RescueJetton` sends to whatever wallet the supervisor names.** A wrong
-   address moves nothing of value but the attachment; the escrow does not know
-   its wallets' balances.
+3. **A `ForceDeliver` that the asset refuses** costs the supervisor's
+   attachment, which bounces back to the escrow's balance, not to the
+   supervisor. A refused NFT is then marked claimable again although the
+   escrow no longer holds it; a client should check the item's owner before
+   offering a claim (as for `SwapEscrowNosup`).
+4. **`RescueNft` and `RescueJetton` are paid from the balance**, as in
+   `SwapEscrow`: each sends a fixed `NFT_TRANSFER_VALUE` or
+   `JETTON_TRANSFER_VALUE` in mode 0 regardless of what the supervisor
+   attached. On an active deal that is the parties' money; on a settled one it
+   comes out of the storage floor. `RescueJetton` sends to whatever wallet the
+   supervisor names; the escrow does not know its wallets' balances.
 5. **`emergency_collect_assets` on a deal in `SETUP`** leaves any unconfirmed
    jetton deposit for `RescueJetton` (section 5); until then the depositor
    cannot pull it, since `claim_asset` only serves recorded deliveries that

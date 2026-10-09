@@ -17,7 +17,8 @@
 // variant:begin
 // SwapEscrowV2 — escrow swap contract for TON with a supervisor role:
 // NFT, GRAM and Jetton deposits. Outside the supervisor blocks it is
-// SwapEscrowNosup line for line (ts-tests/v2-sync.test.ts).
+// SwapEscrowNosup line for line, except the marked variant regions
+// (ts-tests/v2-sync.test.ts).
 // variant:end
 
 // variant:begin
