@@ -356,6 +356,62 @@ get fun `test an underfunded complete deal's last deposit does not spend the bal
     expect(testing.getAccountBalance(escrow.address) >= before).toEqual(true);
 }
 
+// A complete 1x1 deal whose side 2 cannot pay its own NFT's transfer: every
+// deposit is in, the deal is ACTIVE and side 2 has a shortfall.
+fun underfundedComplete(tag: string, seed: int): Deal1x1 {
+    val o1 = testing.treasury(tagged(tag, "-o1"));
+    val o2 = testing.treasury(tagged(tag, "-o2"));
+    val fw = testing.treasury(tagged(tag, "-fw"));
+    val n1 = deployNft(o1, seed);
+    val n2 = deployNft(o2, seed + 1);
+    var cfg = makeBasicConfig(o1, o2, fw);
+    var a: map<uint16, address> = [];
+    a.set(0, n1);
+    var b: map<uint16, address> = [];
+    b.set(0, n2);
+    cfg.nfts1 = a;
+    cfg.nfts1Count = 1;
+    cfg.nfts2 = b;
+    cfg.nfts2Count = 1;
+    val escrow = deployEscrow(o1, cfg);
+    expect(escrow.sendText(o1.address, "service_fee_owner1", SERVICE_FEE)).toHaveAllSuccessfulTxs();
+    expect(escrow.sendText(o2.address, "service_fee_owner2", SERVICE_FEE)).toHaveAllSuccessfulTxs();
+    expect(sendNftToEscrow(o1, n1, escrow.address, ton("2"), 0)).toHaveAllSuccessfulTxs();
+    sendNftToEscrow(o2, n2, escrow.address, ton("0.005"), 1);
+    expect(escrow.phase()).toEqual(PHASE_ACTIVE);
+    val (_s1, s2) = escrow.executionShortfall();
+    expect(s2 > 0).toEqual(true);
+    return Deal1x1 { escrow, o1, o2, fw, nft1: n1, nft2: n2 };
+}
+
+// An owner's deploy_fee on an active deal is that owner's payment, like
+// deposit_ton: when it completes the funding it executes the deal.
+get fun `test an owner's deploy_fee that completes the funding executes the deal`() {
+    val f = underfundedComplete("cd-df-o", 78771);
+    val (_s1, s2) = f.escrow.executionShortfall();
+    f.escrow.sendText(f.o2.address, "deploy_fee", s2 + ton("0.001"));
+    expect(f.escrow.phase()).toEqual(PHASE_DONE);
+    expect(readMockOwner(f.nft1)).toEqual(f.o2.address);
+    expect(readMockOwner(f.nft2)).toEqual(f.o1.address);
+}
+
+// A stranger's deploy_fee is a gift shared equally; it never executes, even
+// when it would cover the shortfall.
+get fun `test a stranger's deploy_fee does not execute the deal`() {
+    val f = underfundedComplete("cd-df-s", 78781);
+    val stranger = testing.treasury("cd-df-s-x");
+    f.escrow.sendText(stranger.address, "deploy_fee", ton("1"));
+    expect(f.escrow.phase()).toEqual(PHASE_ACTIVE);
+}
+
+// In SETUP an owner's deploy_fee pays and starts discovery; it does not
+// execute (the deal cannot execute before every minter answered anyway).
+get fun `test an owner's deploy_fee in SETUP does not execute`() {
+    val d = setupWithSilentMinter("cd-df-su", 78791, false);
+    d.escrow.sendText(d.o1.address, "deploy_fee", ton("1"));
+    expect(d.escrow.phase()).toEqual(PHASE_SETUP);
+}
+
 // The same as `per-side funding without the balance does not execute`, with a
 // jetton as the completing deposit (the COMMIT on the jetton path). Side 1's
 // NFTs come without an index hint: each deposit's linear search burns gas

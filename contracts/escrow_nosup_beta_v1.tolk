@@ -904,7 +904,8 @@ fun Storage.sendProvides(self, plan: DiscoveryPlan) {
 // minters still pending. The sender is not gated; the caller pays for
 // everything the call spends (discoveryCost), checked before any send. An
 // owner's deploy_fee is that owner's payment; a stranger's is a gift that the
-// settlement shares equally.
+// settlement shares equally. On an active deal an owner's deploy_fee also runs
+// the auto-execution check, as deposit_ton does.
 fun handleDeployFee(sender: address, value: coins) {
     var st = Storage.load();
     assert (st.phase == PHASE_ACTIVE || st.phase == PHASE_SETUP) throw Errors.AlreadyFinalized;
@@ -916,6 +917,10 @@ fun handleDeployFee(sender: address, value: coins) {
             g.gram2DepositReserve += value;
         }
         st.grams = g.toCell();
+        // An owner's payment, like deposit_ton: it may complete the funding.
+        if (st.phase == PHASE_ACTIVE) {
+            st.tryAutoExecute(0);
+        }
         st.save();
     }
     if (st.phase != PHASE_SETUP) {

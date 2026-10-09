@@ -337,6 +337,8 @@ passes (`calculateGasFee(17,000 + 2,500 × entries + 8,000 × jetton slots)`);
 below that it is still accepted — the escrow is deployed and the value
 credited — and `deploy_fee` starts discovery later. An owner's
 `deploy_fee` counts as that owner's payment; a stranger's is shared equally.
+On an active deal an owner's `deploy_fee` can complete the funding and
+execute the deal, as `deposit_ton` does; a stranger's never executes.
 Discovery is priced per minter: `PROVIDE_WALLET_VALUE` plus the gas of the
 minter's answer, `TAKE_SCAN_BASE_UNITS + TAKE_SCAN_UNITS_PER_ENTRY × entries +
 TAKE_SET_UNITS × that minter's slots`, plus the scan of the registry. Whatever
@@ -637,7 +639,7 @@ To check the deployed contract, build this source with Acton 1.2.0.
 The compiled code hash of `SwapEscrowNosup` with the current toolchain is:
 
 ```
-7E0F567AB6B41C58F9B9E8F91355446C3DA9E13DEA56ED344E51A87612F0AAED
+5164D74EB689FE7F012404EB931B602A5AD807C8FE1313162713BF9F0E913D26
 ```
 
 Run `acton build` and compare against `build/SwapEscrow.json` and
