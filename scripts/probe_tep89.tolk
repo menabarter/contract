@@ -1,4 +1,4 @@
-// Copyright (C) 2026 MENA
+// Copyright (C) 2026 Mena
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Checks whether a jetton minter responds to TEP-89 (provide_wallet_address).

@@ -1,4 +1,4 @@
-// Copyright (C) 2026 MENA
+// Copyright (C) 2026 Mena
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Testnet smoke: SwapEscrowNosup execute_swap on an underfunded deal — a 1x1

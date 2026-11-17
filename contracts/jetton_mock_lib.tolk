@@ -1,4 +1,4 @@
-// Copyright (C) 2026 MENA
+// Copyright (C) 2026 Mena
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Shared code for the TEP-74 mocks (test-only). The wallet address is derived
 // from the INITIAL stateInit (balance = 0): the current balance lives in data

@@ -1,4 +1,4 @@
-// Copyright (C) 2026 MENA
+// Copyright (C) 2026 Mena
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Shared setup of the one-signature testnet smokes (smoke_nosup_onesig_*).

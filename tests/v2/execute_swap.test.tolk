@@ -1,5 +1,5 @@
 // GENERATED from tests/nosup/execute_swap.test.tolk by ts-tests/gen-v2-tests.ts — edit the source, then run npm run gen:v2.
-// Copyright (C) 2026 MENA
+// Copyright (C) 2026 Mena
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // execute_swap: either owner may call it; it executes only a fully funded deal;

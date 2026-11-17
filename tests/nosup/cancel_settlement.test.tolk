@@ -1,4 +1,4 @@
-// Copyright (C) 2026 MENA
+// Copyright (C) 2026 Mena
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Cancel settles by the same formula as execute. To cancel, the canceller

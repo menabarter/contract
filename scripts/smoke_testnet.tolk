@@ -1,4 +1,4 @@
-// Copyright (C) 2026 MENA
+// Copyright (C) 2026 Mena
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Testnet smoke: a full 1x1 swap (1 NFT from wallet1 <-> 0.3 GRAM from wallet2)

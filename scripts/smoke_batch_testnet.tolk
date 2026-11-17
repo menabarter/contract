@@ -1,4 +1,4 @@
-// Copyright (C) 2026 MENA
+// Copyright (C) 2026 Mena
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Testnet smoke (BATCH deal, >100 assets): 101 NFTs, 51 from side 1 (wallet1)

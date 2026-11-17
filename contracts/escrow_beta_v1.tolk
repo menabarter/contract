@@ -1,5 +1,5 @@
 // SwapEscrow — escrow swap contract for TON: NFT, GRAM and Jetton deposits.
-// Copyright (C) 2026 MENA
+// Copyright (C) 2026 Mena
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU Affero General Public License as published by
@@ -21,7 +21,7 @@ import "messages"
 import "storage"
 
 contract SwapEscrow {
-    author: "MENA"
+    author: "Mena"
     version: "2.0.0-stage2"
     description: "Escrow swap v2 stage 2: NFT + GRAM + Jetton deposits"
     storage: Storage

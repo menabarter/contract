@@ -1,4 +1,4 @@
-// Copyright (C) 2026 MENA
+// Copyright (C) 2026 Mena
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Minimal TEP-74 jetton wallet for tests (analogous to nft_item_mock):
@@ -13,7 +13,7 @@ import "jetton_mock_lib"
 import "messages"
 
 contract JettonWalletMock {
-    author: "MENA"
+    author: "Mena"
     version: "1.0.0"
     description: "Minimal TEP-74 wallet for escrow tests"
     storage: JwStorage

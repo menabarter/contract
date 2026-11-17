@@ -1,4 +1,4 @@
-// Copyright (C) 2026 MENA
+// Copyright (C) 2026 Mena
 //
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU Affero General Public License as published by
@@ -32,7 +32,7 @@ import "v2/messages"
 import "v2/storage"
 
 contract SwapEscrowV2 {
-    author: "MENA"
+    author: "Mena"
     version: "2.0.0-beta"
     description: "Escrow swap with a supervisor: NFT + GRAM + Jetton deposits"
     storage: Storage
