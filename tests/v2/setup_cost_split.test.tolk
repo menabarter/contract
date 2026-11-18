@@ -1,5 +1,5 @@
 // GENERATED from tests/nosup/setup_cost_split.test.tolk by ts-tests/gen-v2-tests.ts — edit the source, then run npm run gen:v2.
-// Copyright (C) 2026 MENA
+// Copyright (C) 2026 Mena
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // What the deal spends on deployment and wallet discovery is shared equally,

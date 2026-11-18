@@ -1,4 +1,4 @@
-// Copyright (C) 2026 MENA
+// Copyright (C) 2026 Mena
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Minimal TIP-4-like NFT item used ONLY by the test suite (a separate
@@ -23,7 +23,7 @@ fun MockNftStorage.save(self) {
 }
 
 contract NftItemMock {
-    author: "MENA"
+    author: "Mena"
     version: "1.0.0"
     description: "Minimal TIP-4 item for escrow tests"
     storage: MockNftStorage

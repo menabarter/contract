@@ -1,4 +1,4 @@
-// Copyright (C) 2026 MENA
+// Copyright (C) 2026 Mena
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Minimal TEP-89 minter for tests: responds with take_wallet_address to
@@ -18,7 +18,7 @@ fun MinterMockStorage.load(): MinterMockStorage {
 }
 
 contract JettonMinterMock {
-    author: "MENA"
+    author: "Mena"
     version: "1.0.0"
     description: "Minimal TEP-89 minter for escrow tests"
     storage: MinterMockStorage

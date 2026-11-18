@@ -725,6 +725,14 @@ D8F57AC6FDB816172157AA098818CCF7C9883EFD2A6E8E2699B0483461B7C7EA
 Run `acton build` and compare against `build/SwapEscrow.json`,
 `build/SwapEscrowNosup.json` and `build/SwapEscrowV2.json` respectively.
 
+Both new contracts are verified on [TON Verifier](https://verifier.ton.org),
+which recompiles the published sources and checks the resulting code hash:
+
+- `SwapEscrowNosup`: <https://verifier.ton.org/5164d74eb689fe7f012404eb931b602a5ad807c8fe1313162713bf9f0e913d26>
+- `SwapEscrowV2`: <https://verifier.ton.org/d8f57ac6fdb816172157aa098818ccf7c9883efd2a6e8e2699b0483461b7c7ea>
+
+Verification is by code hash, so it covers every deal deployed from that code.
+
 ## Continuous integration
 
 `.github/workflows/contracts.yml` runs `acton build`, `acton fmt --check`,
@@ -736,7 +744,7 @@ targeting `main`/`master`, and can also be triggered manually
 
 ## License
 
-Copyright (C) 2026 MENA
+Copyright (C) 2026 Mena
 
 This program is free software: you can redistribute it and/or modify it under
 the terms of the GNU Affero General Public License as published by the Free

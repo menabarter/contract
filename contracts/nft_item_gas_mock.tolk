@@ -1,4 +1,4 @@
-// Copyright (C) 2026 MENA
+// Copyright (C) 2026 Mena
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Test-only NFT item whose transfer burns a configurable amount of gas before
@@ -22,7 +22,7 @@ struct MockGasNftStorage {
 }
 
 contract NftItemGasMock {
-    author: "MENA"
+    author: "Mena"
     version: "1.0.0"
     description: "TIP-4 item with a gas-hungry transfer, for escrow tests"
     storage: MockGasNftStorage
